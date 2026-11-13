@@ -159,6 +159,30 @@ class ChunkTests(unittest.TestCase):
         self.assertEqual(tables[0].metadata["pdf_page"], 3)
 
 
+class TranslationGroupTests(unittest.TestCase):
+    """The EN/DE/IT versions of a section must share one translation_group."""
+
+    def test_parallel_manuals_agree(self):
+        from ingest.chunk import translation_group
+
+        en = translation_group(
+            "FlashBot",
+            {"section_number": "2.3", "section_title": "Technical Specifications", "chunk_type": "table"},
+        )
+        de = translation_group(
+            "FlashBot",
+            {"section_number": "2.3", "section_title": "Technische Daten", "chunk_type": "table"},
+        )
+        self.assertEqual(en, de)
+
+    def test_different_chunk_types_do_not_collide(self):
+        from ingest.chunk import translation_group
+
+        table = translation_group("FlashBot", {"section_number": "2.3", "chunk_type": "table"})
+        text = translation_group("FlashBot", {"section_number": "2.3", "chunk_type": "text"})
+        self.assertNotEqual(table, text)
+
+
 class RealWorldQuirkTests(unittest.TestCase):
     """Behaviours taken from the actual PUDU manuals in ``data/``."""
 
