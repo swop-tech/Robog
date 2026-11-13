@@ -29,7 +29,7 @@ source-grounded answers for both technicians and non-technical users.
 python -m unittest tests.test_ingest -v
 
 # clean + chunk the manuals -> build/chunks.jsonl
-# (drop the dataset into data/ first — see data/README.md)
+# (the dataset lives in data/ — see data/README.md)
 python -m ingest.run --data data --out build/chunks.jsonl
 ```
 
@@ -45,4 +45,4 @@ python -m ingest.embed_index --provider local    # offline, no key
 python -m ingest.embed_index --provider gemini   # needs GEMINI_API_KEY (free)
 ```
 
-*Work in progress on branch `arena/cb500270-robog`.*
+*Work in progress on branch `arena/1cc436fc-robog`.*

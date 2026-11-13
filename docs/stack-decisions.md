@@ -78,8 +78,8 @@ LlamaIndex later, swapping the store is a few lines if needed.
 
 - **Python 3.11+** with a virtual environment (`python -m venv .venv`) — runs on
   any laptop, CPU-only, no GPU needed.
-- **VS Code** + **Git/GitHub** for the team (this repo; work on
-  `arena/cb500270-robog`, never `main`).
+- **VS Code** + **Git/GitHub** for the team (this repo; work on feature branches,
+  never `main`).
 - Everything local and free; no Docker required for development.
 - Free deploy options when we demo (later): Streamlit Community Cloud,
   Hugging Face Spaces, or Render free tier.
