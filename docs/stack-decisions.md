@@ -99,15 +99,22 @@ Gemini embeddings — easiest), or **Ollama** running a small model locally
 - TXT files (if any appear) can be added to the discovery list in
   `ingest/run.py` with one line.
 
-## 6. Status: data processing is DONE and tested
+## 6. Status: data processing is DONE and tested on the real dataset
 
 ```bash
-python -m unittest tests.test_ingest -v        # 15 tests, all green
-python -m ingest.run --data data --out build/chunks.jsonl   # once the dataset is in data/
+python -m unittest tests.test_ingest -v        # 40 tests, all green
+python -m ingest.run --data data               # run on the dataset in data/
 pip install -r requirements-rag.txt            # only needed for phase 2
 python -m ingest.embed_index --provider gemini # or --provider local
 ```
 
-Chunks come out as JSONL with full citation metadata
-(`title`, `language`, `section`, `page`, `chunk_type`, `image`) — exactly what
-the "preserve source metadata" box of the pipeline needs.
+`ingest.run` writes three files into `build/` (git-ignored):
+
+| File | Purpose |
+|---|---|
+| `chunks.jsonl` | 1,351 chunks with full citation metadata (`product`, `doc_type`, `title`, `language`, `source_pdf`, `section`, `section_number`, `page`/`pdf_page`, `chunk_type`, `image`) — exactly what the "preserve source metadata" box of the pipeline needs |
+| `params.jsonl` | 2,039 structured parameter rows (`product → parameter → value/unit → source page`, linked to the chunk) — the parameter index of gap G1 |
+| `data-report.md` | validation gate: 0 errors, 1 warning on the current dataset |
+
+It also exits non-zero when validation finds an error, so phase 2 only ever runs
+on clean data. Details: [data-processing.md](data-processing.md).

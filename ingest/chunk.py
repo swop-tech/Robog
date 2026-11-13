@@ -10,11 +10,16 @@ Design decisions (see docs/pipeline-review.md section 5):
   the relevant image.
 * Tables become their own chunks with ``chunk_type="table"`` -- exact parameter
   values ("what's the value of this parameter?") are much easier to find.
+  ``ingest/params.py`` additionally turns the same tables into structured
+  parameter rows (the parameter index of docs/pipeline-review.md, gap G1).
 * No artificial overlap between chunks: every chunk carries full source
   metadata, and duplicated text would break numeric evidence checks later
   (the same number appearing in two chunks).
 
-Each chunk is a dict: {"id", "text", "metadata"} -- JSONL-ready.
+Every chunk keeps the full citation trail described in
+docs/pipeline-review.md section 5: ``product``, ``manual``, ``doc_type``,
+``language``, ``source_pdf``, ``section``, ``section_number``, ``section_title``,
+``page`` / ``pdf_page``, ``chunk_type`` and -- for figures -- ``image``.
 
 This module uses only the Python standard library.
 
@@ -28,6 +33,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .clean import Manual
 
@@ -35,11 +41,17 @@ from .clean import Manual
 # input limit of gemini-embedding-2 and small enough for precise retrieval.
 DEFAULT_MAX_CHARS = 2200
 
+# How many non-blank lines to look ahead for a figure's AI description. In some
+# manuals (e.g. the SH1 one) the description sits *after* the prose that
+# explains the figure instead of directly under the image.
+FIGURE_DESC_LOOKAHEAD = 6
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _SECTION_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\s*[.:)]?\s+(.+)$")
 _IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}.*\|?\s*$")
-_BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
+_BULLET_RE = re.compile(r"^[ \t]*[-*][ \t]+(.+?)\s*$")
+_QUOTE_LINE_RE = re.compile(r"^\s*>\s?(.*)$")
 
 # "Figure description (AI):" (EN) / "Bildbeschreibung (KI):" (DE) /
 # "Descrizione della figura (IA):" (IT) -- with or without the marker suffix.
@@ -50,8 +62,22 @@ _FIG_DESC_RE = re.compile(
 )
 # "Labels:" (EN) / "Beschriftungen:" (DE) / "Etichette:" (IT)
 _LABELS_HEADER_RE = re.compile(
-    r"^(?:Labels?|Beschriftungen|Etichette)\s*:?\s*$", re.IGNORECASE
+    r"^(?:Labels?|Beschriftungen|Etichette)\s*:?$", re.IGNORECASE
 )
+
+# A blockquote that is a callout, not a figure description:
+# "> **Warning:** do not block the Lidar."
+_CALLOUT_RE = re.compile(r"^\s*>\s*(?:\*\*[^*]{1,60}\*\*|\*[^*]{1,60}\*)\s*[:：]?")
+
+# Alt texts that carry no information ("![Image]", "![]", ...).
+_GENERIC_ALT = {
+    "", "image", "images", "figure", "fig", "figura", "abbildung", "abb",
+    "image added from the pdf", "image (added from the pdf)",
+}
+
+# Section label used for content that appears before the first heading
+# (copyright pages, cover notes).
+FRONT_MATTER_SECTION = "Front matter"
 
 
 @dataclass
@@ -110,6 +136,12 @@ def _strip_md_noise(line: str) -> str:
     return text.replace("*", " ").strip()
 
 
+def _clean_label(label: str) -> str:
+    """``"**1** Emergency stop switch"`` -> ``"1 Emergency stop switch"``."""
+    text = label.replace("**", "").replace("*", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _is_table_start(lines: list[str], i: int) -> bool:
     """A table starts when a '|'-line is followed by a separator '|---|' line."""
     return (
@@ -149,6 +181,44 @@ def _split_long_paragraph(text: str, max_chars: int) -> list[str]:
     return parts
 
 
+def _quote_block(lines: list[str], i: int) -> tuple[str, int]:
+    """Read a markdown blockquote starting at ``i``; return its text and the
+    index of the first line after it."""
+    parts: list[str] = []
+    n = len(lines)
+    while i < n:
+        m = _QUOTE_LINE_RE.match(lines[i])
+        if not m:
+            break
+        parts.append(m.group(1).strip())
+        i += 1
+    text = " ".join(p for p in parts if p)
+    return _strip_md_noise("> " + text) if text else "", i
+
+
+def _figure_text(desc: str, alt: str, labels: list[str], meta: dict) -> str:
+    """Build the searchable text of a figure chunk.
+
+    The AI description is the main content; the ``Labels:`` list adds the
+    printed callouts ("1 Emergency stop switch"). A few figures have neither,
+    so the section breadcrumb + page keep them findable (and every figure chunk
+    has text -- an empty chunk can never be retrieved).
+    """
+    text = desc.strip()
+    alt_clean = alt.strip()
+    if len(text) < 40 and alt_clean.lower() not in _GENERIC_ALT:
+        text = (text + " " + alt_clean).strip()
+    if len(text) < 40:
+        where = meta.get("section") or FRONT_MATTER_SECTION
+        page = meta.get("page")
+        place = f"page {page}" if page else f"PDF page {meta.get('pdf_page')}"
+        head = f"Figure from '{where}', {place}."
+        text = f"{head} {text}".strip() if text else head
+    if labels:
+        text += "\nLabels: " + "; ".join(labels)
+    return text.strip()
+
+
 class _Parser:
     """Walks the cleaned markdown line by line and produces blocks."""
 
@@ -159,6 +229,7 @@ class _Parser:
         self.breadcrumb: list[tuple[int, str]] = []  # (heading level, title)
         self.blocks: list[_Block] = []
         self.para_buf: list[str] = []
+        self.consumed: set[int] = set()  # lines already taken by a figure
 
     def section_meta(self) -> dict:
         titles = [title for _, title in self.breadcrumb]
@@ -186,6 +257,9 @@ class _Parser:
     def parse(self) -> list[_Block]:
         i, n = 0, len(self.lines)
         while i < n:
+            if i in self.consumed:
+                i += 1
+                continue
             line = self.lines[i]
             stripped = line.strip()
 
@@ -237,44 +311,85 @@ class _Parser:
         self.flush_para()
         return self.blocks
 
+    # -- figures -------------------------------------------------------------
     def _parse_figure(self, alt: str, image: str, i: int) -> int:
         n = len(self.lines)
         meta = self.section_meta()
 
-        # description: "> *Figure description (AI): …*"
-        while i < n and self.lines[i].strip() == "":
-            i += 1
+        # 1) description directly under the image: "> *Figure description (AI): …*"
+        #    A warning/note callout in the same place is ordinary text.
         desc = ""
-        if i < n and self.lines[i].lstrip().startswith(">"):
-            desc = _strip_md_noise(self.lines[i])
-            m = _FIG_DESC_RE.match(desc)
+        j = self._skip_blank(i)
+        if j < n and _QUOTE_LINE_RE.match(self.lines[j]):
+            quoted, end = _quote_block(self.lines, j)
+            m = _FIG_DESC_RE.match(quoted)
             if m:
                 desc = m.group(1).strip()
-            i += 1
+                i = end
+            elif not _CALLOUT_RE.match(self.lines[j]):
+                # a plain quote under the image is its description
+                desc = quoted
+                i = end
 
-        # labels: "*Labels:" header, then a bulleted list
+        # 2) otherwise look a few lines ahead (some manuals put the prose
+        #    between the image and its description)
+        if not desc.strip():
+            found = self._find_figure_desc(i)
+            if found is not None:
+                desc, start, end = found
+                self.consumed.update(range(start, end))
+
+        # 3) labels: "*Labels:" header, then a bulleted list
         labels: list[str] = []
-        while i < n and self.lines[i].strip() == "":
-            i += 1
-        if i < n and _LABELS_HEADER_RE.match(_strip_md_noise(self.lines[i])):
-            i += 1
-            while i < n:
-                bullet = _BULLET_RE.match(self.lines[i].strip())
+        j = self._skip_blank(i)
+        if j < n and _LABELS_HEADER_RE.match(_strip_md_noise(self.lines[j])):
+            j += 1
+            while j < n:
+                bullet = _BULLET_RE.match(self.lines[j])
                 if bullet:
-                    labels.append(bullet.group(1).strip())
-                    i += 1
-                elif self.lines[i].strip() == "":
-                    i += 1  # blank lines inside / after the list are fine
+                    label = _clean_label(bullet.group(1))
+                    if label:
+                        labels.append(label)
+                    j += 1
+                elif self.lines[j].strip() == "":
+                    j += 1  # blank lines inside / after the list are fine
                 else:
                     break
+            i = j
 
-        text = desc or alt
-        if labels:
-            text += "\nLabels: " + "; ".join(labels)
+        text = _figure_text(desc, alt, labels, meta)
         figure_meta = dict(meta, chunk_type="figure", image=image)
         self.blocks.append(_Block("figure", text, figure_meta, image=image))
         return i
 
+    def _skip_blank(self, i: int) -> int:
+        n = len(self.lines)
+        while i < n and self.lines[i].strip() == "":
+            i += 1
+        return i
+
+    def _find_figure_desc(self, i: int) -> tuple[str, int, int] | None:
+        """Look ahead for ``> *Figure description …*`` (stops at structure)."""
+        n = len(self.lines)
+        seen = 0
+        j = i
+        while j < n and seen < FIGURE_DESC_LOOKAHEAD:
+            line = self.lines[j].strip()
+            if line == "":
+                j += 1
+                continue
+            if line.startswith("#") or _IMAGE_RE.match(line) or _is_table_start(self.lines, j):
+                return None
+            if _QUOTE_LINE_RE.match(self.lines[j]):
+                text, end = _quote_block(self.lines, j)
+                m = _FIG_DESC_RE.match(text)
+                if m:  # only take a real figure description, not a warning box
+                    return m.group(1).strip(), j, end
+            seen += 1
+            j += 1
+        return None
+
+    # -- tables --------------------------------------------------------------
     def _parse_table(self, i: int) -> int:
         n = len(self.lines)
         meta = self.section_meta()
@@ -289,15 +404,41 @@ class _Parser:
 # --------------------------------------------------------------------------
 # Packing: blocks -> chunks
 # --------------------------------------------------------------------------
+def product_name(title: str, manual: str) -> str:
+    """``"FlashBot User Manual V1.0"`` -> ``"FlashBot"``.
+
+    The product name is what users ask about ("does the FlashBot fit in a
+    lift?"), so it is worth carrying on every chunk.
+    """
+    name = re.sub(r"\s+User\s+Manual(\s+V[\d.]+)?\s*$", "", title, flags=re.IGNORECASE)
+    name = re.sub(r"\s+V\d+(\.\d+)*\s*$", "", name).strip()
+    return name or manual
+
+
+def doc_type_for(path: Path) -> str:
+    """``manuals/`` folders hold robots, ``accessories/`` folders accessories."""
+    parts = [p.lower() for p in path.parts]
+    if "accessories" in parts:
+        return "accessory"
+    if "manuals" in parts:
+        return "robot"
+    return "unknown"
+
+
 def chunk_manual(manual: Manual, max_chars: int = DEFAULT_MAX_CHARS) -> list[Chunk]:
     """Split one cleaned manual into retrieval chunks with source metadata."""
     blocks = _Parser(manual.body).parse()
     doc_id = _slug(manual.path.parent.name) + "-" + manual.language
     base_meta = {
+        "doc_id": doc_id,
         "source_file": str(manual.path),
         "manual": manual.path.parent.name,
+        "doc_type": doc_type_for(manual.path),
+        "product": product_name(manual.title, manual.path.parent.name),
         "title": manual.title,
         "language": manual.language,
+        "source_pdf": str(manual.meta.get("source_pdf", "")),
+        "reference_pdf": str(manual.meta.get("reference_pdf", "")),
     }
 
     chunks: list[Chunk] = []
@@ -305,9 +446,15 @@ def chunk_manual(manual: Manual, max_chars: int = DEFAULT_MAX_CHARS) -> list[Chu
 
     def add(text: str, meta: dict) -> None:
         nonlocal counter
+        text = text.strip()
+        if not text:  # never emit an empty chunk: it cannot be retrieved
+            return
         counter += 1
         meta = dict(meta)
         meta.setdefault("chunk_type", "text")  # tables/figures set their own
+        if not meta.get("section"):
+            meta["section"] = FRONT_MATTER_SECTION
+            meta["section_title"] = meta.get("section_title") or FRONT_MATTER_SECTION
         chunks.append(Chunk(f"{doc_id}-{counter:04d}", text, dict(base_meta, **meta)))
 
     # Pack consecutive "para" blocks up to max_chars; tables and figures

@@ -171,8 +171,9 @@ Final answer — answer + citations + relevant image
 
 ## 8. Next steps
 
-1. **Get the actual dataset into the workspace** (the `manuals/` + `accessories/` folders the
-   README describes) — we can then build ingestion against real files.
+1. ~~**Get the actual dataset into the workspace**~~ ✅ done — `data/` now holds the 22 manuals
+   (63 markdown files). Ingestion is built and validated against the real files:
+   see [`data-processing.md`](data-processing.md).
 2. Scaffold the backend (FastAPI) with the three endpoints; ingestion script producing chunks,
    figure index and parameter index.
 3. Build the ~20-question eval set from the manuals (both personas, all three languages,
