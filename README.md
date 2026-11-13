@@ -9,6 +9,7 @@ source-grounded answers for both technicians and non-technical users.
 - 🔍 Review of the team's pipeline diagram: [`docs/pipeline-review.md`](docs/pipeline-review.md)
 - 🧰 Stack decisions (embeddings, RAG framework, vector DB): [`docs/stack-decisions.md`](docs/stack-decisions.md)
 - 🧹 Data processing (clean, chunk, metadata, parameter index): [`docs/data-processing.md`](docs/data-processing.md)
+- 🔎 Retrieval engine (routing, language policy, evaluation): [`docs/retrieval.md`](docs/retrieval.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
   (Bonus 01), multilingual ask/answer (Bonus 02), web chat as the required interface.
@@ -18,6 +19,7 @@ source-grounded answers for both technicians and non-technical users.
 | Layer | Choice |
 |---|---|
 | Data processing | Plain Python (`ingest/`), no dependencies |
+| Retrieval | Plain Python (`retrieve/`): BM25 + parameter index + language policy, no dependencies |
 | Embeddings | `gemini-embedding-2` (free tier) or `multilingual-e5-small` (offline) — pluggable |
 | Vector DB | Chroma (embedded) |
 | RAG framework | LlamaIndex (retrieval + answering, phase 3) |
@@ -46,7 +48,28 @@ Figures and tables get their own chunks so answers can return exact parameter va
 and the relevant image; tables additionally become rows in the parameter index
 (`product → parameter → value/unit → source page`) for exact technician lookups.
 
-## Embedding + indexing (phase 2)
+## Retrieval engine (phase 2 — done, measured)
+
+```bash
+python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonus 01)
+python -m retrieve.evaluate                               # 20-question benchmark
+python -m unittest tests.test_retrieve -v                 # 37 tests
+```
+
+Hybrid retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
+structured parameter index for exact values, a domain lexicon (payload ≈ Zuladung ≈ carico) and a
+per-question language policy (user's language first, cross-lingual fallback for the manuals
+without one). Measured on 20 questions (EN/DE/IT, both personas):
+
+| Configuration | Recall@8 | Hits in question language | Cross-language duplicates |
+|---|---|---|---|
+| every language at once (naive RAG) | 100% | 68% | 12% |
+| user's language only (hard filter) | 85% | 85% | 0% |
+| **same language first, fallback** | **100%** | **85%** | **0%** |
+
+Details: [`docs/retrieval.md`](docs/retrieval.md).
+
+## Embedding + indexing (phase 3 — dense layer)
 
 ```bash
 pip install -r requirements-rag.txt

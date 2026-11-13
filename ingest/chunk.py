@@ -415,6 +415,20 @@ def product_name(title: str, manual: str) -> str:
     return name or manual
 
 
+def translation_group(product: str, meta: dict) -> str:
+    """Stable key shared by the EN/DE/IT versions of the same passage.
+
+    The manuals are parallel translations, so the same section holds the same
+    content in three languages. Retrieval can then collapse cross-language
+    duplicates ("the same paragraph three times") while keeping several chunks
+    of the *same* language. Approximate by design: it groups a section, not a
+    sentence (translations split paragraphs differently).
+    """
+    anchor = meta.get("section_number") or meta.get("section_title") or FRONT_MATTER_SECTION
+    kind = meta.get("chunk_type") or "text"
+    return f"{_slug(product)}|{_slug(str(anchor))}|{kind}"
+
+
 def doc_type_for(path: Path) -> str:
     """``manuals/`` folders hold robots, ``accessories/`` folders accessories."""
     parts = [p.lower() for p in path.parts]
@@ -452,6 +466,7 @@ def chunk_manual(manual: Manual, max_chars: int = DEFAULT_MAX_CHARS) -> list[Chu
         counter += 1
         meta = dict(meta)
         meta.setdefault("chunk_type", "text")  # tables/figures set their own
+        meta.setdefault("translation_group", translation_group(base_meta["product"], meta))
         if not meta.get("section"):
             meta["section"] = FRONT_MATTER_SECTION
             meta["section_title"] = meta.get("section_title") or FRONT_MATTER_SECTION
