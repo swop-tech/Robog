@@ -7,6 +7,8 @@ Cleaning is deliberately conservative -- we only remove noise, never content:
 2. Remove HTML comments.
 3. Normalize weird whitespace (non-breaking spaces, zero-width characters).
 4. Strip trailing spaces and collapse runs of blank lines.
+5. Drop horizontal rules (``---`` page separators) -- they carry no content,
+   but would otherwise show up as junk retrieval chunks.
 
 Page marker lines (e.g. ``*Page 3 (PDF page 4, left)*``) are NOT removed here --
 the chunker reads them to attach page numbers to every chunk (used later for
@@ -31,6 +33,9 @@ _FRONT_MATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _NBSP_RE = re.compile(r"[\u00a0\u2007\u202f]")  # non-breaking spaces
 _ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
+# A markdown horizontal rule ("---", "* * *", "___") used in the manuals as a
+# page separator. It carries no content, so it never becomes a chunk.
+_HORIZONTAL_RULE_RE = re.compile(r"^\s*(?:[-*_]\s*){3,}$")
 
 
 @dataclass
@@ -83,6 +88,11 @@ def normalize(body: str) -> str:
     out: list[str] = []
     blank_run = 0
     for line in lines:
+        if _HORIZONTAL_RULE_RE.match(line) and "|" not in line:
+            if not out or out[-1] != "":
+                out.append("")  # a rule separates blocks -> becomes a break
+            blank_run = 1
+            continue
         if line == "":
             blank_run += 1
             if blank_run <= 1:  # keep at most one blank line in a row
