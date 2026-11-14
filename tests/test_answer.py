@@ -697,6 +697,25 @@ class CorpusAnswerTests(unittest.TestCase):
         self.assertNotIn("Tell me the use case", answer.text)
         self.assertIn("T300", answer.text)
 
+    def test_load_question_only_names_robots_that_carry_the_load(self):
+        # A sweeper that cannot carry 300 kg must not appear in the answer.
+        answer = self.composer.answer("Which robot can carry 300 kg in a factory?")
+        self.assertIn("T300", answer.text)
+        self.assertNotIn("MT1", answer.text)
+        self.assertNotIn("PuduBot 2", answer.text)
+        self.assertTrue(answer.validation.ok)
+
+    def test_impossible_load_says_no_robot_meets_it(self):
+        answer = self.composer.answer("Which robot can carry 900 kg?")
+        self.assertIn("None of the robots", answer.text)
+        self.assertEqual(answer.citations, [])
+
+    def test_narrow_restaurant_comparison_names_the_narrowest_passage(self):
+        answer = self.composer.answer("BellaBot vs KettyBot Pro for a narrow restaurant")
+        self.assertIn("Narrowest passage among these: 55 cm", answer.text)
+        self.assertIn("KettyBot Pro", answer.text)
+        self.assertTrue(answer.validation.ok, [i.message for i in answer.validation.issues])
+
     def test_under_specified_lookup_asks_for_the_robot_and_parameter(self):
         # The brief's technician persona asks "What's the value of this
         # parameter?": quoting whatever BM25 returns for the bare words

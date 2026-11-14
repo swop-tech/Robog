@@ -158,6 +158,40 @@ def _parameter_block(params: list[EvidenceRef], language: str) -> str:
     return "\n".join(lines)
 
 
+#: How many robots an advisory answer lists -- a shortlist, not the catalogue.
+PROFILE_SHORTLIST = 4
+
+
+def _comparison_line(profiles: list[EvidenceRef], language: str) -> str:
+    """One factual line over the shortlist: the narrowest passage, cited to its cards.
+
+    Only numbers printed on a card are used (no sums, no per-tray arithmetic), so
+    every figure in the line is verifiable against the evidence.
+    """
+    from retrieve.profiles import _card_min_width_cm
+
+    widths = []
+    for ref in profiles:
+        width = _card_min_width_cm(ref.source)
+        if width is not None:
+            widths.append((width, ref))
+    if len(widths) < 2:
+        return ""
+    best = min(width for width, _ in widths)
+    winners = [ref for width, ref in widths if width == best]
+    if len(winners) == len(widths):
+        return ""  # all equal: nothing to single out
+    names = ", ".join(ref.product for ref in winners)
+    refs = ", ".join(f"[{ref.n}]" for ref in winners)
+    return text(
+        "compare_passage",
+        language,
+        width=f"{best:g} cm",
+        names=names,
+        refs=refs,
+    )
+
+
 def _profile_block(profiles: list[EvidenceRef], language: str) -> str:
     """One bullet per robot: decisive specs, then what it is for -- one citation.
 
@@ -166,7 +200,8 @@ def _profile_block(profiles: list[EvidenceRef], language: str) -> str:
     intended use, and the card it all came from.
     """
     lines = [text("profiles_header", language)]
-    for ref in profiles:
+    shortlist = profiles[:PROFILE_SHORTLIST]
+    for ref in shortlist:
         lines.append(
             text(
                 "profile_line",
@@ -178,6 +213,9 @@ def _profile_block(profiles: list[EvidenceRef], language: str) -> str:
                 ref=ref.n,
             )
         )
+    comparison = _comparison_line(shortlist, language)
+    if comparison:
+        lines.append(comparison)
     return "\n".join(lines)
 
 

@@ -169,6 +169,25 @@ STRINGS: dict[str, dict[str, str]] = {
             "(carico, batteria, velocità, capacità del serbatoio, dimensioni) e lo citerò con la pagina."
         ),
     },
+    "compare_passage": {
+        "en": "Narrowest passage among these: {width} — {names} {refs}.",
+        "de": "Schmalste Durchgangsbreite unter diesen: {width} — {names} {refs}.",
+        "it": "Passaggio più stretto tra questi: {width} — {names} {refs}.",
+    },
+    "no_match_constraint": {
+        "en": (
+            "None of the robots in the manuals meets that requirement, so I will not name one. "
+            "Check the value, or name a robot and I will quote its exact specification."
+        ),
+        "de": (
+            "Kein Roboter in den Handbüchern erfüllt diese Anforderung, deshalb nenne ich keinen. "
+            "Prüfen Sie den Wert oder nennen Sie einen Roboter, dann zitiere ich seine genaue Spezifikation."
+        ),
+        "it": (
+            "Nessun robot dei manuali soddisfa questo requisito, quindi non ne indico nessuno. "
+            "Controlla il valore oppure indica un robot e citerò la sua specifica esatta."
+        ),
+    },
     "needs_scenario": {
         "en": (
             "Which robot is best depends on where it will work, and I do not want to guess. "

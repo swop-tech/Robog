@@ -72,6 +72,19 @@ question's language by asking for the use case (restaurant, hotel/elevator, clea
 or a kg / cm value), the same way a lookup with no robot or parameter asks back. Questions that name a
 scenario or a value are ranked as before. The check is `retrieve.profiles.has_scenario_signal`.
 
+### 1b. Hard constraints before the shortlist
+
+Advisory answers now apply facts stated in the question before they show any robot:
+
+* a load in kg keeps only robots whose payload reaches it (*300 kg* → PUDU T300 only; an impossible
+  load gets an explicit "no robot meets this" answer, not a substitute);
+* a passage in cm keeps only robots that fit through it;
+* a use case keeps only robots of that kind (cleaning / industrial / delivery).
+
+The shortlist is capped at four robots, and when two or more have a printed passage width the answer
+adds one line naming the narrowest, citing its card. Only figures printed on a card are used — no sums
+or per-tray arithmetic — so the number check can verify every value.
+
 Limit: the offline formatter still cannot *judge* between robots. Once a scenario is given it lists the
 matching cards; it does not say which is better.
 
