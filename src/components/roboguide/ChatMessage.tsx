@@ -6,7 +6,8 @@ import type { ChatMessage as ChatMessageType } from "@/types/chat";
 import { BrandLogo } from "./BrandMark";
 import { SourceReferences } from "./SourceReference";
 
-const time = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const time = (ts: number) =>
+  new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export function ChatMessage({ message }: { message: ChatMessageType }) {
   if (message.role === "user") {
@@ -32,7 +33,9 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
         <span
           className={cn(
             "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium",
-            technical ? "border-border bg-background text-foreground" : "border-primary/40 bg-accent text-accent-foreground",
+            technical
+              ? "border-border bg-background text-foreground"
+              : "border-primary/40 bg-accent text-accent-foreground",
           )}
         >
           <ModeIcon className="size-3" />
@@ -59,10 +62,14 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
             <p className={technical ? "text-sm" : "text-base"}>{message.content}</p>
           </div>
         ) : (
-          <MessageResponse className={technical ? "answer-technical" : "answer-simple"}>{message.content}</MessageResponse>
+          <MessageResponse className={technical ? "answer-technical" : "answer-simple"}>
+            {message.content}
+          </MessageResponse>
         )}
       </MessageContent>
-      {!notFound && <SourceReferences sources={message.sources ?? []} isDemo={message.isDemo ?? false} />}
+      {!notFound && (
+        <SourceReferences sources={message.sources ?? []} isDemo={message.isDemo ?? false} />
+      )}
     </Message>
   );
 }

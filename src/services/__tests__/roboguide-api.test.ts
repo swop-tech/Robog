@@ -16,7 +16,12 @@ describe("RoboGuide API service", () => {
   it("sends question, robot, mode and response_language in the request body", () => {
     expect(
       buildRequestBody(
-        { question: "What is the maximum payload?", robot: "ArmPro X6", mode: "technical", responseLanguage: "English" },
+        {
+          question: "What is the maximum payload?",
+          robot: "ArmPro X6",
+          mode: "technical",
+          responseLanguage: "English",
+        },
         config,
       ),
     ).toEqual({
@@ -29,7 +34,12 @@ describe("RoboGuide API service", () => {
 
   it("sends the non-technical mode value for Simple mode", () => {
     const body = buildRequestBody(
-      { question: "What does payload mean?", robot: null, mode: "non-technical", responseLanguage: "Italian" },
+      {
+        question: "What does payload mean?",
+        robot: null,
+        mode: "non-technical",
+        responseLanguage: "Italian",
+      },
       config,
     );
     expect(body.mode).toBe("non-technical");
@@ -37,7 +47,10 @@ describe("RoboGuide API service", () => {
   });
 
   it("never invents a page number when the backend omits it", () => {
-    const res = mapResponse({ answer: "10 kg", sources: [{ manual: "X6 Manual", excerpt: "Payload: 10 kg" }] });
+    const res = mapResponse({
+      answer: "10 kg",
+      sources: [{ manual: "X6 Manual", excerpt: "Payload: 10 kg" }],
+    });
     expect(res.sources[0]?.page).toBeNull();
     expect(res.sources[0]?.url).toBeNull();
   });
@@ -64,7 +77,12 @@ describe("RoboGuide API service", () => {
   });
 
   it("flags mock answers as demo and never gives them page numbers", async () => {
-    const res = await mockAsk({ question: "payload?", robot: "ArmPro X6", mode: "technical", responseLanguage: "English" });
+    const res = await mockAsk({
+      question: "payload?",
+      robot: "ArmPro X6",
+      mode: "technical",
+      responseLanguage: "English",
+    });
     expect(res.isDemo).toBe(true);
     expect(res.sources.every((s) => s.page === null)).toBe(true);
   });

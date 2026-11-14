@@ -65,7 +65,12 @@ export function useChatSession(threadId: string) {
     (text: string) => {
       const question = text.trim();
       if (!question || status === "submitted") return;
-      appendMessage(threadId, { id: newId(), role: "user", content: question, createdAt: Date.now() });
+      appendMessage(threadId, {
+        id: newId(),
+        role: "user",
+        content: question,
+        createdAt: Date.now(),
+      });
       void request(question);
     },
     [threadId, request, status],

@@ -10,7 +10,14 @@ interface ModeSelectionCardProps {
   detail: string;
 }
 
-export function ModeSelectionCard({ title, description, icon: Icon, selected, onSelect, detail }: ModeSelectionCardProps) {
+export function ModeSelectionCard({
+  title,
+  description,
+  icon: Icon,
+  selected,
+  onSelect,
+  detail,
+}: ModeSelectionCardProps) {
   return (
     <button
       type="button"
@@ -26,7 +33,9 @@ export function ModeSelectionCard({ title, description, icon: Icon, selected, on
       <span
         className={cn(
           "absolute right-5 top-5 flex size-6 items-center justify-center rounded-full border transition-colors",
-          selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-transparent",
+          selected
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-border bg-background text-transparent",
         )}
         aria-hidden
       >
@@ -35,7 +44,9 @@ export function ModeSelectionCard({ title, description, icon: Icon, selected, on
       <span
         className={cn(
           "flex size-14 items-center justify-center rounded-xl transition-colors",
-          selected ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground group-hover:text-primary",
+          selected
+            ? "bg-primary text-primary-foreground"
+            : "bg-secondary text-foreground group-hover:text-primary",
         )}
       >
         <Icon className="size-7" strokeWidth={1.75} />

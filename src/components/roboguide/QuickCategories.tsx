@@ -10,7 +10,13 @@ const icons: Record<QuickCategory["id"], typeof HardHat> = {
   troubleshooting: Search,
 };
 
-export function QuickCategories({ onAsk, disabled }: { onAsk: (q: string) => void; disabled?: boolean }) {
+export function QuickCategories({
+  onAsk,
+  disabled,
+}: {
+  onAsk: (q: string) => void;
+  disabled?: boolean;
+}) {
   const [active, setActive] = useState<QuickCategory["id"] | null>(null);
   return (
     <SidebarSection title="Quick categories" icon={LayoutGrid}>
@@ -31,7 +37,12 @@ export function QuickCategories({ onAsk, disabled }: { onAsk: (q: string) => voi
               >
                 <Icon className={cn("size-4", open ? "text-primary" : "text-foreground")} />
                 <span className="flex-1 text-left">{cat.label}</span>
-                <ChevronRight className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")} />
+                <ChevronRight
+                  className={cn(
+                    "size-4 text-muted-foreground transition-transform",
+                    open && "rotate-90",
+                  )}
+                />
               </button>
               {open && (
                 <ul className="mb-1 ml-4 mt-1 space-y-0.5 border-l border-border pl-3">

@@ -32,7 +32,11 @@ export function ProfileDropdown() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {items.map(({ to, label, icon: Icon }) => (
-          <DropdownMenuItem key={to} asChild className="cursor-pointer gap-2.5 py-2 focus:bg-accent focus:text-accent-foreground">
+          <DropdownMenuItem
+            key={to}
+            asChild
+            className="cursor-pointer gap-2.5 py-2 focus:bg-accent focus:text-accent-foreground"
+          >
             <Link to={to}>
               <Icon className="size-4" />
               {label}

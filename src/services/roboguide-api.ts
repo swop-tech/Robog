@@ -63,7 +63,14 @@ const pickPage = (obj: Raw): number | null => {
 
 function mapSource(raw: unknown): SourceReference | null {
   if (!isObj(raw)) return null;
-  const manual = pickString(raw, ["manual", "document", "title", "source", "file_name", "filename"]);
+  const manual = pickString(raw, [
+    "manual",
+    "document",
+    "title",
+    "source",
+    "file_name",
+    "filename",
+  ]);
   if (!manual) return null; // never show a citation without a document name
   return {
     manual,
@@ -98,7 +105,10 @@ export function mapResponse(raw: unknown): Omit<AskResult, "isDemo"> {
 
 async function realAsk(input: AskInput, signal?: AbortSignal): Promise<AskResult> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new DOMException("timeout", "TimeoutError")), apiConfig.timeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("timeout", "TimeoutError")),
+    apiConfig.timeoutMs,
+  );
   const onAbort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", onAbort);
 
@@ -110,7 +120,10 @@ async function realAsk(input: AskInput, signal?: AbortSignal): Promise<AskResult
       signal: controller.signal,
     });
     if (!res.ok) {
-      throw new RoboGuideApiError(`The RoboGuide service responded with an error (${res.status}).`, res.status);
+      throw new RoboGuideApiError(
+        `The RoboGuide service responded with an error (${res.status}).`,
+        res.status,
+      );
     }
     const data: unknown = await res.json().catch(() => {
       throw new RoboGuideApiError("The RoboGuide service returned an unreadable response.");
@@ -122,14 +135,19 @@ async function realAsk(input: AskInput, signal?: AbortSignal): Promise<AskResult
     if (controller.signal.aborted) {
       throw new RoboGuideApiError("The request took too long. Please try again.");
     }
-    throw new RoboGuideApiError("Couldn't reach the RoboGuide service. Check your connection and try again.");
+    throw new RoboGuideApiError(
+      "Couldn't reach the RoboGuide service. Check your connection and try again.",
+    );
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
 }
 
-export function askRoboGuide(input: AskInput, options: { signal?: AbortSignal } = {}): Promise<AskResult> {
+export function askRoboGuide(
+  input: AskInput,
+  options: { signal?: AbortSignal } = {},
+): Promise<AskResult> {
   return isMockMode() ? mockAsk(input, options.signal) : realAsk(input, options.signal);
 }
 

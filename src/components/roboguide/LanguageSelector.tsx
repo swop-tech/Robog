@@ -21,7 +21,11 @@ export function LanguageSelector({ value, onChange }: LanguageSelectorProps) {
       </SelectTrigger>
       <SelectContent align="end">
         {RESPONSE_LANGUAGES.map((l) => (
-          <SelectItem key={l.value} value={l.value} className="focus:bg-accent focus:text-accent-foreground">
+          <SelectItem
+            key={l.value}
+            value={l.value}
+            className="focus:bg-accent focus:text-accent-foreground"
+          >
             {l.label}
             <span className="ml-2 font-mono text-xs text-muted-foreground">{l.code}</span>
           </SelectItem>

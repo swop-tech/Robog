@@ -79,7 +79,12 @@ export function getThread(id: string) {
   return threadsStore.read().find((t) => t.id === id) ?? null;
 }
 
-export function createThread(init: { id?: string; mode: AnswerMode; robotId?: string | null; language?: string }) {
+export function createThread(init: {
+  id?: string;
+  mode: AnswerMode;
+  robotId?: string | null;
+  language?: string;
+}) {
   const now = Date.now();
   const thread: ChatThread = {
     id: init.id ?? newId(),
@@ -98,7 +103,10 @@ export function createThread(init: { id?: string; mode: AnswerMode; robotId?: st
 }
 
 /** Idempotent: creates the thread only if it doesn't already exist. */
-export function ensureThread(id: string, defaults: { mode: AnswerMode; robotId?: string | null; language?: string }) {
+export function ensureThread(
+  id: string,
+  defaults: { mode: AnswerMode; robotId?: string | null; language?: string },
+) {
   if (!getThread(id)) createThread({ id, ...defaults });
 }
 

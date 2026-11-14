@@ -11,17 +11,28 @@ function SourceRow({ source, isDemo }: { source: Source; isDemo?: boolean | unde
         <FileText className="size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           {source.url ? (
-            <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-accent-foreground underline-offset-2 hover:underline">
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-accent-foreground underline-offset-2 hover:underline"
+            >
               <span className="truncate">{source.manual}</span>
               <ExternalLink className="size-3 shrink-0" />
             </a>
           ) : (
-            <span className="block truncate text-xs font-medium text-foreground">{source.manual}</span>
+            <span className="block truncate text-xs font-medium text-foreground">
+              {source.manual}
+            </span>
           )}
           <span className="flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
             {source.page !== null && <span className="font-mono">p. {source.page}</span>}
             {source.language && <span>Original language: {source.language}</span>}
-            {isDemo && <span className="font-semibold uppercase tracking-wider text-accent-foreground">Demo placeholder</span>}
+            {isDemo && (
+              <span className="font-semibold uppercase tracking-wider text-accent-foreground">
+                Demo placeholder
+              </span>
+            )}
           </span>
         </div>
         {source.excerpt && (
@@ -45,7 +56,13 @@ function SourceRow({ source, isDemo }: { source: Source; isDemo?: boolean | unde
   );
 }
 
-export function SourceReferences({ sources, isDemo }: { sources: Source[]; isDemo?: boolean | undefined }) {
+export function SourceReferences({
+  sources,
+  isDemo,
+}: {
+  sources: Source[];
+  isDemo?: boolean | undefined;
+}) {
   if (sources.length === 0) {
     return (
       <p className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">

@@ -13,16 +13,31 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { findRobot } from "@/config/app";
 import { useChatSession } from "@/hooks/use-chat-session";
-import { createThread, ensureThread, setPreferences, updateThread, usePreferences, useThreads } from "@/lib/chat-store";
+import {
+  createThread,
+  ensureThread,
+  setPreferences,
+  updateThread,
+  usePreferences,
+  useThreads,
+} from "@/lib/chat-store";
 import type { AnswerMode, ChatThread } from "@/types/chat";
 
 export const Route = createFileRoute("/chat/$threadId")({
   head: () => ({
     meta: [
       { title: "Chat — RoboGuide AI" },
-      { name: "description", content: "Ask RoboGuide AI about your robot's manual and see the sources behind every answer." },
+      {
+        name: "description",
+        content:
+          "Ask RoboGuide AI about your robot's manual and see the sources behind every answer.",
+      },
       { property: "og:title", content: "Chat — RoboGuide AI" },
-      { property: "og:description", content: "Ask RoboGuide AI about your robot's manual and see the sources behind every answer." },
+      {
+        property: "og:description",
+        content:
+          "Ask RoboGuide AI about your robot's manual and see the sources behind every answer.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -39,12 +54,20 @@ function ChatPage() {
 
   useEffect(() => {
     if (hydrated && !thread) {
-      ensureThread(threadId, { mode: prefs.mode ?? "technical", robotId: prefs.robotId, language: prefs.language });
+      ensureThread(threadId, {
+        mode: prefs.mode ?? "technical",
+        robotId: prefs.robotId,
+        language: prefs.language,
+      });
     }
   }, [hydrated, thread, threadId, prefs]);
 
   if (!thread) {
-    return <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">Loading conversation…</div>;
+    return (
+      <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
+        Loading conversation…
+      </div>
+    );
   }
   return <ChatScreen key={thread.id} thread={thread} />;
 }
@@ -74,18 +97,36 @@ function ChatScreen({ thread }: { thread: ChatThread }) {
   };
   const newChat = () => {
     setNavOpen(false);
-    const id = createThread({ mode: thread.mode, robotId: thread.robotId, language: thread.language });
+    const id = createThread({
+      mode: thread.mode,
+      robotId: thread.robotId,
+      language: thread.language,
+    });
     void navigate({ to: "/chat/$threadId", params: { threadId: id } });
   };
 
-  const sidebar = <Sidebar mode={thread.mode} onModeChange={setMode} onAsk={ask} onNewChat={newChat} busy={busy} />;
+  const sidebar = (
+    <Sidebar
+      mode={thread.mode}
+      onModeChange={setMode}
+      onAsk={ask}
+      onNewChat={newChat}
+      busy={busy}
+    />
+  );
   const robotSelector = <RobotSelector value={thread.robotId} onChange={setRobot} />;
 
   return (
     <div className="flex h-dvh flex-col bg-background">
       <Header
         leading={
-          <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open menu" onClick={() => setNavOpen(true)}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden"
+            aria-label="Open menu"
+            onClick={() => setNavOpen(true)}
+          >
             <Menu className="size-5" />
           </Button>
         }
@@ -95,12 +136,19 @@ function ChatScreen({ thread }: { thread: ChatThread }) {
       />
       <DemoBanner />
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-64 shrink-0 border-r border-border md:block lg:w-72">{sidebar}</aside>
+        <aside className="hidden w-64 shrink-0 border-r border-border md:block lg:w-72">
+          {sidebar}
+        </aside>
         <Sheet open={navOpen} onOpenChange={setNavOpen}>
-          <SheetContent side="left" className="flex w-80 max-w-[85vw] flex-col gap-0 bg-sidebar p-0">
+          <SheetContent
+            side="left"
+            className="flex w-80 max-w-[85vw] flex-col gap-0 bg-sidebar p-0"
+          >
             <div className="flex h-14 shrink-0 items-center border-b border-sidebar-border px-4">
               <SheetTitle className="font-display text-base font-semibold">Menu</SheetTitle>
-              <SheetDescription className="sr-only">FAQs, quick categories and answer mode</SheetDescription>
+              <SheetDescription className="sr-only">
+                FAQs, quick categories and answer mode
+              </SheetDescription>
             </div>
             <div className="min-h-0 flex-1">{sidebar}</div>
           </SheetContent>
@@ -115,7 +163,12 @@ function ChatScreen({ thread }: { thread: ChatThread }) {
             onDismissError={session.dismissError}
             onAsk={ask}
           />
-          <ChatInput onSend={session.send} busy={busy} mode={thread.mode} focusKey={`${thread.messages.length}-${session.status}`} />
+          <ChatInput
+            onSend={session.send}
+            busy={busy}
+            mode={thread.mode}
+            focusKey={`${thread.messages.length}-${session.status}`}
+          />
         </main>
       </div>
     </div>

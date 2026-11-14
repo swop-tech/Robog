@@ -3,18 +3,19 @@ import type { AnswerMode } from "@/types/chat";
 export const APP_NAME = "RoboGuide AI";
 
 /** UI labels per mode. "Simple" is the short sidebar label for Non-technical mode. */
-export const MODE_LABELS: Record<AnswerMode, { full: string; short: string; description: string }> = {
-  technical: {
-    full: "Technical",
-    short: "Technical",
-    description: "Detailed and precise technical information.",
-  },
-  "non-technical": {
-    full: "Non-technical",
-    short: "Simple",
-    description: "Easy-to-understand explanations.",
-  },
-};
+export const MODE_LABELS: Record<AnswerMode, { full: string; short: string; description: string }> =
+  {
+    technical: {
+      full: "Technical",
+      short: "Technical",
+      description: "Detailed and precise technical information.",
+    },
+    "non-technical": {
+      full: "Non-technical",
+      short: "Simple",
+      description: "Easy-to-understand explanations.",
+    },
+  };
 
 export interface RobotOption {
   id: string;

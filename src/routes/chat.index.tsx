@@ -34,5 +34,9 @@ function NewChat() {
     void navigate({ to: "/chat/$threadId", params: { threadId: id }, replace: true });
   }, [hydrated, prefs, navigate]);
 
-  return <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">Opening a new conversation…</div>;
+  return (
+    <div className="flex min-h-dvh items-center justify-center text-sm text-muted-foreground">
+      Opening a new conversation…
+    </div>
+  );
 }

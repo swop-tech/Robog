@@ -19,7 +19,9 @@ export function Header({ leading, center, actions, mobileRow }: HeaderProps) {
       <div className="flex h-16 items-center gap-3 px-4 sm:px-6">
         {leading}
         <BrandMark compact={!!center} />
-        <div className="hidden flex-1 justify-center md:flex">{center && <div className="w-full max-w-sm">{center}</div>}</div>
+        <div className="hidden flex-1 justify-center md:flex">
+          {center && <div className="w-full max-w-sm">{center}</div>}
+        </div>
         <div className="ml-auto flex items-center gap-2 md:ml-0">
           {actions}
           <ProfileDropdown />

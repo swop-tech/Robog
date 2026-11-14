@@ -6,9 +6,15 @@ export const Route = createFileRoute("/history")({
   head: () => ({
     meta: [
       { title: "Chat History — RoboGuide AI" },
-      { name: "description", content: "Reopen previous RoboGuide AI conversations or start a new one." },
+      {
+        name: "description",
+        content: "Reopen previous RoboGuide AI conversations or start a new one.",
+      },
       { property: "og:title", content: "Chat History — RoboGuide AI" },
-      { property: "og:description", content: "Reopen previous RoboGuide AI conversations or start a new one." },
+      {
+        property: "og:description",
+        content: "Reopen previous RoboGuide AI conversations or start a new one.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],

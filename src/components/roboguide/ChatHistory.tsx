@@ -25,7 +25,9 @@ export function ChatHistory() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {hydrated ? `${sorted.length} conversation${sorted.length === 1 ? "" : "s"} saved in this browser` : "Loading…"}
+          {hydrated
+            ? `${sorted.length} conversation${sorted.length === 1 ? "" : "s"} saved in this browser`
+            : "Loading…"}
         </p>
         <Button onClick={startNew}>
           <Plus /> New conversation
@@ -35,7 +37,9 @@ export function ChatHistory() {
       {hydrated && sorted.length === 0 && (
         <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
           <MessageSquare className="mx-auto size-8 text-muted-foreground" />
-          <p className="mt-3 text-sm text-muted-foreground">No conversations yet. Start one to see it here.</p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            No conversations yet. Start one to see it here.
+          </p>
         </div>
       )}
 
@@ -44,7 +48,10 @@ export function ChatHistory() {
           const robot = findRobot(t.robotId);
           const ModeIcon = t.mode === "technical" ? Wrench : Lightbulb;
           return (
-            <li key={t.id} className="group flex items-center gap-2 rounded-xl border border-border bg-card shadow-card transition-colors hover:border-primary/60">
+            <li
+              key={t.id}
+              className="group flex items-center gap-2 rounded-xl border border-border bg-card shadow-card transition-colors hover:border-primary/60"
+            >
               <Link
                 to="/chat/$threadId"
                 params={{ threadId: t.id }}
@@ -56,8 +63,16 @@ export function ChatHistory() {
                     <ModeIcon className="size-3 text-primary" /> {MODE_LABELS[t.mode].short}
                   </span>
                   <span>· {robot?.name ?? "No machine selected"}</span>
-                  <span>· {t.messages.length} message{t.messages.length === 1 ? "" : "s"}</span>
-                  <span>· {new Date(t.updatedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+                  <span>
+                    · {t.messages.length} message{t.messages.length === 1 ? "" : "s"}
+                  </span>
+                  <span>
+                    ·{" "}
+                    {new Date(t.updatedAt).toLocaleString([], {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </span>
                 </p>
               </Link>
               <Button

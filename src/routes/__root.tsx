@@ -81,13 +81,15 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "RoboGuide AI — Industrial robot manual assistant" },
       {
         name: "description",
-        content: "Ask questions about industrial robot user manuals in technical or simple language.",
+        content:
+          "Ask questions about industrial robot user manuals in technical or simple language.",
       },
       { name: "author", content: "RoboGuide AI" },
       { property: "og:title", content: "RoboGuide AI — Industrial robot manual assistant" },
       {
         property: "og:description",
-        content: "Ask questions about industrial robot user manuals in technical or simple language.",
+        content:
+          "Ask questions about industrial robot user manuals in technical or simple language.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

@@ -51,7 +51,9 @@ export function ChatInput({ onSend, busy, mode, focusKey }: ChatInputProps) {
             <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <ModeIcon className="size-3.5 text-primary" />
               <span className="font-medium text-foreground">{MODE_LABELS[mode].short} mode</span>
-              <span className="hidden sm:inline">· Enter to send · Shift + Enter for a new line</span>
+              <span className="hidden sm:inline">
+                · Enter to send · Shift + Enter for a new line
+              </span>
             </span>
             <PromptInputSubmit
               status={busy ? "submitted" : "ready"}

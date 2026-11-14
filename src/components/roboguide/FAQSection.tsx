@@ -2,7 +2,13 @@ import { CircleHelp, MessageSquareText } from "lucide-react";
 import { FAQS } from "@/config/app";
 import { SidebarSection } from "./SidebarSection";
 
-export function FAQSection({ onAsk, disabled }: { onAsk: (q: string) => void; disabled?: boolean }) {
+export function FAQSection({
+  onAsk,
+  disabled,
+}: {
+  onAsk: (q: string) => void;
+  disabled?: boolean;
+}) {
   return (
     <SidebarSection title="FAQs" icon={CircleHelp}>
       <ul className="space-y-0.5">

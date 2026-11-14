@@ -37,7 +37,11 @@ export function RobotSelector({ value, onChange, className }: RobotSelectorProps
             Sample machines
           </SelectLabel>
           {SAMPLE_ROBOTS.map((r) => (
-            <SelectItem key={r.id} value={r.id} className="focus:bg-accent focus:text-accent-foreground">
+            <SelectItem
+              key={r.id}
+              value={r.id}
+              className="focus:bg-accent focus:text-accent-foreground"
+            >
               <span className="font-medium">{r.name}</span>
               <span className="ml-2 text-xs text-muted-foreground">{r.type}</span>
             </SelectItem>
