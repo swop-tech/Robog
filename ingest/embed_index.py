@@ -18,10 +18,12 @@ Both embedding providers are free -- pick one with --provider:
 How the Gemini path works (text-only):
 
 * It calls the *synchronous* ``batchEmbedContents`` endpoint through the
-  google-genai SDK (``client.models.embed_content`` with a list of
-  contents). That endpoint returns one embedding per content, in order, and
-  accepts *at most 100 requests per call* -- so we batch 100 at a time
-  (14 calls for 1,351 chunks). No async Batch API is used.
+  google-genai SDK (``client.models.embed_content``). Each chunk is sent
+  as its OWN Content (one content per text -- a list of raw strings would
+  be folded by the SDK into one multipart content and return a single
+  embedding per call). The endpoint returns one embedding per request, in
+  order, and accepts *at most 100 requests per call* -- so we batch 100 at
+  a time (14 calls for 1,351 chunks). No async Batch API is used.
 * A token-aware throttle (default: at most 24,000 estimated input
   tokens per rolling 60-second window, ~20% headroom under the 30,000
   TPM free-tier limit) paces the batches instead of firing them blindly.
@@ -169,7 +171,7 @@ def append_checkpoint(path: Path, *, chunks_sha256: str, model: str, dims: int,
 def _is_fatal_error(exc: Exception) -> bool:
     text = str(exc)
     fatal_markers = ("400", "401", "403", "INVALID_ARGUMENT", "UNAUTHENTICATED",
-                     "PERMISSION_DENIED", "not found", "404")
+                     "PERMISSION_DENIED", "not found", "404", "embeddings in response")
     return any(marker in text for marker in fatal_markers)
 
 
@@ -212,12 +214,21 @@ class GeminiEmbedder:
     def embed_batch(self, batch: list[str]) -> list[list[float]]:
         """Embed one batch (<=100 texts) in a single synchronous
         batchEmbedContents call. Raises on failure -- retry logic lives in
-        ``embed_gemini_resumable``."""
+        ``embed_gemini_resumable``.
+
+        IMPORTANT (google-genai SDK, gemini-embedding-2): a list of raw
+        strings is folded by ``t_contents`` into ONE multipart content
+        (verified: ['a','b'] -> 1 content with 2 parts), which yields ONE
+        embedding per call, not one per string. Passing one Content dict
+        per text produces one request per text in batchEmbedContents,
+        hence one embedding per chunk, in order.
+        """
         if len(batch) > GEMINI_BATCH_SIZE:
             raise ValueError(f"batch of {len(batch)} exceeds the 100-request endpoint limit")
+        contents = [{"role": "user", "parts": [{"text": t}]} for t in batch]
         response = self.client.models.embed_content(
             model=self.model_name,
-            contents=batch,
+            contents=contents,
             config={"output_dimensionality": self.dims},
         )
         vectors = [list(e.values) for e in response.embeddings]

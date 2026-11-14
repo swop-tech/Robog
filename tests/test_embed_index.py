@@ -6,8 +6,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from ingest.embed_index import (
+    GeminiEmbedder,
     append_checkpoint,
     embed_gemini_resumable,
     load_checkpoint,
@@ -32,6 +34,58 @@ def make_rows(n):
         {"id": f"chunk-{i:04d}", "text": f"text number {i}", "metadata": {"title": f"T{i}"}}
         for i in range(n)
     ]
+
+
+class GeminiBatchShapeTests(unittest.TestCase):
+    """Regression test for the production bug where a list of raw strings
+    was folded by the SDK into ONE multipart content, yielding 1 embedding
+    for N texts."""
+
+    def _make_embedder(self, capture: dict):
+        embedder = GeminiEmbedder.__new__(GeminiEmbedder)  # skip genai.Client()
+        embedder.model_name = "gemini-embedding-2"
+        embedder.dims = 4
+
+        class FakeModels:
+            def embed_content(self, *, model, contents, config):
+                capture["model"] = model
+                capture["contents"] = contents
+                capture["config"] = config
+                n = len(contents)
+                return SimpleNamespace(
+                    embeddings=[SimpleNamespace(values=[1.0, 2.0, 3.0, 4.0]) for _ in range(n)]
+                )
+
+        embedder.client = SimpleNamespace(models=FakeModels())
+        return embedder
+
+    def test_one_content_per_text_and_config_kwarg(self):
+        capture: dict = {}
+        embedder = self._make_embedder(capture)
+        texts = [f"chunk text {i}" for i in range(5)]
+        vectors = embedder.embed_batch(texts)
+        self.assertEqual(len(vectors), 5)
+        # one Content dict per text, single text part, correct config
+        self.assertEqual(len(capture["contents"]), 5)
+        for i, content in enumerate(capture["contents"]):
+            self.assertEqual(content["role"], "user")
+            self.assertEqual(content["parts"], [{"text": texts[i]}])
+        self.assertEqual(capture["config"], {"output_dimensionality": 4})
+        self.assertNotIn("output_dimensionality", capture)  # top-level kwarg must not be used
+
+    def test_counts_mismatch_raises(self):
+        capture: dict = {}
+        embedder = self._make_embedder(capture)
+
+        class FakeModels:
+            def embed_content(self, *, model, contents, config):
+                return SimpleNamespace(
+                    embeddings=[SimpleNamespace(values=[1.0, 2.0, 3.0, 4.0])]  # always 1
+                )
+
+        embedder.client = SimpleNamespace(models=FakeModels())
+        with self.assertRaises(RuntimeError):
+            embedder.embed_batch(["a", "b"])
 
 
 class CheckpointTests(unittest.TestCase):
