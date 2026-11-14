@@ -9,14 +9,41 @@ an `AnswerComposer`, `api/app.py` adds validation/status codes/JSON, and
 pip install -r requirements-api.txt
 python -m ingest.run --data data        # once: build/chunks.jsonl + params + profiles
 python -m api                           # http://0.0.0.0:8000 — chat at /, Swagger at /docs
-python -m api --port 8080 --vector auto # dense fusion + a different port
-python -m unittest tests.test_api -v    # 57 tests, no API key, no network
+uvicorn api.app:app --reload            # the same app (reads .env too)
+python -m api --port 8080 --vector off  # keyword-only + a different port
+python -m unittest tests.test_api -v    # 61 tests, no API key, no network
 python -m unittest tests.test_ui -v     # 11 web-chat serving tests
 ```
 
 No key needed: without `GEMINI_API_KEY` the composer answers with its
 deterministic grounded formatter, and `/health` says so
 (`"provider": {"provider": "offline", "reason": "GEMINI_API_KEY not set"}`).
+
+### Live end-to-end check (Gemini + Chroma)
+
+Dense retrieval is **on by default** (`ROBOG_API_VECTOR=auto`): if `build/chroma`
+exists the server fuses it with BM25 and the parameter index, otherwise it runs
+keyword-only. Either way `/health` tells you which one you got, so the check is:
+
+```bash
+cp .env.example .env                              # put your GEMINI_API_KEY in it
+python -m ingest.run --data data                  # chunks + params + profiles
+python -m ingest.embed_index --provider gemini    # ends: "Indexed 1351 chunks into build/chroma"
+uvicorn api.app:app --reload                      # or: python -m api
+curl -s localhost:8000/health
+```
+
+| `/health` field | Expect | If not |
+|---|---|---|
+| `vector_active` | `true` | `vector_detail` gives the reason (no store, provider mismatch, missing key/package) |
+| `provider.provider` | `gemini` | `provider.reason` gives the reason; answers come from the offline formatter |
+| `chunks` | `1351` | re-run `python -m ingest.run --data data` |
+
+Then ask something: `/search` hits carry `"sources": [..., "vector"]` and
+`notes` contains `dense retrieval on (gemini)`. If the embedding API fails at
+question time the engine drops to keyword-only for the rest of the process and
+`vector_active` flips to `false` with the error in `vector_detail` -- ask one
+question, then re-check `/health`, before calling the demo ready.
 
 ## Why this is the Bonus 01 claim
 
@@ -240,7 +267,7 @@ laptop or in a container; `python -m api` exposes the same knobs as flags.
 | `ROBOG_DATA_DIR` | `<repo>/data` | manuals + figures (the media root) |
 | `ROBOG_BUILD_DIR` | `<repo>/build` | where the indexes live |
 | `ROBOG_CHUNKS` / `ROBOG_PARAMS` / `ROBOG_PROFILES` | `<build>/*.jsonl` | index files |
-| `ROBOG_API_VECTOR` | `off` | `auto` fuses Chroma results (falls back to keyword-only) |
+| `ROBOG_API_VECTOR` | `auto` | `auto` fuses Chroma results when `build/chroma` exists (keyword-only otherwise, `/health` says why); `off` never tries |
 | `ROBOG_API_DEFAULT_K` / `ROBOG_API_MAX_K` | 8 / 20 | default and maximum `k` |
 | `ROBOG_API_MEDIA_MAX_AGE` | 86400 | `Cache-Control` seconds for figures |
 | `ROBOG_API_CORS_ORIGINS` | `*` | comma-separated origins for the chat UI |

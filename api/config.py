@@ -12,7 +12,7 @@ Variable                   Default                Meaning
 ``ROBOG_CHUNKS``           ``<build>/chunks.jsonl``
 ``ROBOG_PARAMS``           ``<build>/params.jsonl``
 ``ROBOG_PROFILES``         ``<build>/profiles.jsonl``
-``ROBOG_API_VECTOR``       ``off``                ``auto`` attaches Chroma (dense)
+``ROBOG_API_VECTOR``       ``auto``               attach Chroma when built; ``off``
 ``ROBOG_API_DEFAULT_K``    ``8``                  hits per ``/search`` by default
 ``ROBOG_API_MAX_K``        ``20``                 upper bound a client may ask for
 ``ROBOG_API_MEDIA_MAX_AGE`` ``86400``             ``Cache-Control`` seconds
@@ -30,6 +30,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from retrieve.env import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -85,9 +87,12 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        # ``uvicorn api.app:app`` never goes through ``python -m api``, so the
+        # ``ROBOG_API_*`` values in ``.env`` have to be loaded here, not later.
+        load_dotenv()
         data_dir = _resolve_path(os.environ.get("ROBOG_DATA_DIR"), REPO_ROOT / "data")
         build_dir = _resolve_path(os.environ.get("ROBOG_BUILD_DIR"), REPO_ROOT / "build")
-        vector = (os.environ.get("ROBOG_API_VECTOR") or "off").strip().lower()
+        vector = (os.environ.get("ROBOG_API_VECTOR") or "auto").strip().lower()
         origins = os.environ.get("ROBOG_API_CORS_ORIGINS", "*")
         return cls(
             data_dir=data_dir,
