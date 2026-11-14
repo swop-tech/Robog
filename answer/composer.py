@@ -42,6 +42,7 @@ from retrieve.engine import SearchEngine, SearchResult
 
 from .evidence import Evidence
 from retrieve.profiles import has_numeric_constraint
+from .suggest import suggestion_text
 from .formatter import Draft, format_answer
 from .llm import Generator, build_generator, describe_provider
 from .prompt import build_prompt, language_instruction
@@ -162,15 +163,18 @@ class AnswerComposer:
         # served by the one thing that actually helps: ask which robot and which
         # parameter. The gate runs on the retrieval result, before evidence
         # selection, because junk passages are perfectly retrievable.
+        # A question that names neither a robot nor a parameter is not a dead end:
+        # the manuals say which parameters and products they cover, so offer those.
         if result.route == "lookup" and not result.params and not result.products:
+            body = suggestion_text(self.engine, language)
             draft = Draft(
-                text=text("needs_robot_and_parameter", language),
+                text=body,
                 provider="offline",
                 language=language,
-                notes=["under-specified lookup: no robot and no parameter named"],
+                notes=["under-specified lookup: suggested parameters and robots from the data"],
             )
             empty = Evidence(language=language, notes=list(result.notes))
-            notes.append("asked back: question named neither a robot nor a parameter")
+            notes.append("suggested parameters and robots (question named neither)")
             return self._finish(question, draft, empty, result, language, notes, started)
 
         # A stated load or passage that no card satisfies: say so, do not

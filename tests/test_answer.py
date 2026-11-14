@@ -722,16 +722,31 @@ class CorpusAnswerTests(unittest.TestCase):
         # "value"/"parameter" would be a guess dressed as an answer.
         answer = self.composer.answer("What is the value of this parameter?")
         self.assertEqual(answer.route, "lookup")
-        self.assertIn("Which robot and which parameter", answer.text)
+        # No dead end: the answer offers parameters and robots the data really has.
+        self.assertIn("Parameters the manuals document most often", answer.text)
+        self.assertIn("Battery capacity", answer.text)
+        self.assertIn("FlashBot", answer.text)
         self.assertEqual(answer.citations, [])
         self.assertEqual(answer.figures, [])
         self.assertFalse(answer.validation.checks_run)
-        self.assertTrue(any("asked back" in note for note in answer.notes), answer.notes)
+        self.assertTrue(any("suggested" in note for note in answer.notes), answer.notes)
 
     def test_under_specified_lookup_asks_back_in_the_question_language(self):
         answer = self.composer.answer("Qual è il valore di questo parametro?")
         self.assertEqual(answer.language, "it")
-        self.assertIn("Quale robot e quale parametro", answer.text)
+        self.assertIn("Parametri più spesso documentati", answer.text)
+        self.assertNotIn("Quale robot e quale parametro", answer.text)
+
+    def test_german_value_question_with_no_robot_gets_suggestions(self):
+        answer = self.composer.answer("Wie ist der Wert dieses Parameters?")
+        self.assertEqual(answer.route, "lookup")
+        self.assertIn("Parameter, die die Handbücher", answer.text)
+
+    def test_suggested_example_questions_are_answerable(self):
+        answer = self.composer.answer("What is the value of this parameter?")
+        self.assertIn("What is the battery capacity?", answer.text)
+        follow_up = self.composer.answer("What is the battery capacity?")
+        self.assertIn("Battery capacity", follow_up.text)
 
     def test_a_lookup_that_names_its_parameter_still_answers(self):
         answer = self.composer.answer("What is the value of the FlashBot load capacity?")

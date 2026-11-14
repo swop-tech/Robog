@@ -113,7 +113,7 @@ _LOOKUP_CUES = {
         "specification", "power output", "temperature range", "size of",
     ),
     "de": (
-        "wie viel", "wieviel", "wie hoch", "wie lang", "wie gross",
+        "wie viel", "wieviel", "wie hoch", "wie lang", "wie gross", "wie ist der wert", "wert von", "wert dieses", "wert des",
         "wert von", "gewicht", "spannung", "kapazitat", "abmessung",
         "masse", "zuladung", "nutzlast", "akkulaufzeit", "technische daten",
     ),

@@ -188,6 +188,35 @@ STRINGS: dict[str, dict[str, str]] = {
             "Controlla il valore oppure indica un robot e citerò la sua specifica esatta."
         ),
     },
+    "suggest_intro": {
+        "en": (
+            "I can answer that from the manuals. Tell me a robot or a parameter, or pick one of the "
+            "suggestions below; here is what the manuals cover."
+        ),
+        "de": (
+            "Das kann ich aus den Handbüchern beantworten. Nennen Sie einen Roboter oder einen Parameter "
+            "oder wählen Sie einen Vorschlag unten; hier ist, was die Handbücher abdecken."
+        ),
+        "it": (
+            "Posso rispondere dai manuali. Indicami un robot o un parametro, oppure scegli uno dei suggerimenti "
+            "qui sotto; ecco cosa coprono i manuali."
+        ),
+    },
+    "suggest_parameters": {
+        "en": "**Parameters the manuals document most often:** {names}.",
+        "de": "**Parameter, die die Handbücher am häufigsten nennen:** {names} (englische Bezeichnungen).",
+        "it": "**Parametri più spesso documentati nei manuali:** {names} (denominazioni inglesi).",
+    },
+    "suggest_products": {
+        "en": "**Robots and accessories I can quote:** {names}.",
+        "de": "**Roboter und Zubehör, die ich zitieren kann:** {names}.",
+        "it": "**Robot e accessori che posso citare:** {names}.",
+    },
+    "suggest_examples": {
+        "en": "Try: “{question_a}” or “{question_b}”. Every answer comes with its manual page.",
+        "de": "Versuchen Sie: „{question_a}“ oder „{question_b}“. Jede Antwort nennt die Seite im Handbuch.",
+        "it": "Prova: «{question_a}» oppure «{question_b}». Ogni risposta riporta la pagina del manuale.",
+    },
     "needs_scenario": {
         "en": (
             "Which robot is best depends on where it will work, and I do not want to guess. "
