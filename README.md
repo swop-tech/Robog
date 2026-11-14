@@ -12,6 +12,7 @@ source-grounded answers for both technicians and non-technical users.
 - 🔎 Retrieval engine (routing, language policy, evaluation): [`docs/retrieval.md`](docs/retrieval.md)
 - 💬 Answer composer + evidence validation (G5, Bonus 02): [`docs/answering.md`](docs/answering.md)
 - 🔌 FastAPI backend (`/search`, `/ask`, `/products`, `/media`): [`docs/api.md`](docs/api.md)
+- 🖥️ Web chat UI (`ui/`, served at `GET /`): [`ui/README.md`](ui/README.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
   (Bonus 01), multilingual ask/answer (Bonus 02), web chat as the required interface.
@@ -62,7 +63,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 259 tests
+python -m unittest discover -s tests -p "test_*.py"       # 270 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -127,7 +128,7 @@ cited, **100%** numbers verified, **0** invented numbers, **100%** answer-langua
 ```bash
 pip install -r requirements-api.txt
 python -m ingest.run --data data      # once: build/chunks.jsonl + params + profiles
-python -m api                         # http://0.0.0.0:8000, Swagger UI at /docs
+python -m api                         # http://0.0.0.0:8000 — chat at /, Swagger at /docs
 
 curl 'localhost:8000/search?q=Wieviel+Zuladung+hat+der+FlashBot%3F&k=3'   # Bonus 01
 curl -X POST localhost:8000/ask -H 'content-type: application/json' \
@@ -151,10 +152,36 @@ and `/media` keeps working without one. Details, the full JSON contracts and the
 **Images are now viewable over HTTP.** All 476 figures are indexed as their own chunks with a
 resolvable `image` path and parsed `labels` legend, the `figure` route (`G6`) selects
 language-appropriate overview/callout diagrams in EN, DE, and IT (falling back to EN when a manual
-lacks Italian), and every figure hit now carries a fetchable `image_url` — the §9a gap is closed.
-Remaining: UI rendering in the chat interface.
+lacks Italian), and every figure hit now carries a fetchable `image_url` — the §9a gap is closed,
+and the web chat renders them inline.
 
-## Next: chat UI
+## Web chat UI (phase 5 — the required interface)
 
-Streaming answers, clickable citations (they already carry `citation` + `page` + `image_url`) and
-inline figures — the last open item in [`docs/pipeline-review.md`](docs/pipeline-review.md) §9.
+```bash
+python -m api                         # then open http://0.0.0.0:8000 in a browser
+python -m unittest tests.test_ui -v   # 11 serving-contract tests (no browser, key or corpus)
+```
+
+A fast, **zero-build** single-page chat (`ui/`: plain HTML + CSS + one ES module, no bundler, no
+framework, no CDN) served straight from FastAPI at `GET /`. The route is content-negotiated: a
+browser gets the chat page, an API client (`curl`, `api/client.py`, `Accept: */*`) keeps the JSON
+endpoint index — so Bonus 01's contract is unchanged. The assets are a `/ui` static mount that stays
+out of `/openapi.json`, and the page keeps serving when the index is missing (degraded, not dead).
+
+Built around the judging rubric:
+
+- **Starter chips for all 4 winning scenarios** — technician exact lookup (`"Wieviel Zuladung hat der
+  FlashBot?"`), non-technical advisory comparison (`"Which robot fits a busy restaurant best?"`),
+  cross-lingual Bonus 02 (`"Qual è la velocità massima del FlashBot?"`, IT question / EN-DE manual),
+  and visual/diagram lookup (`"Show me the component diagram of BellaBot"`).
+- **Inline clickable citations** — every `[n]` opens the exact manual title, section, PDF page,
+  language and source snippet (plus the figure when the source owns one).
+- **Inline rendered figures** with their `Labels:` callout legend, click-to-zoom; lookup answers also
+  get an exact-value spec card.
+- **Verification badge** showing the citation & numeric checks (`✓ Verified · 2/2 cited · 13/13
+  numbers`), expandable to rate bars and issues, plus a cross-lingual disclosure badge.
+- **Toggleable "Raw `/search` JSON" drawer** with the exact request URL, **Re-run live** and **Copy
+  JSON** — Bonus 01 proven on stage: the chat is only the first client of the retrieval service.
+
+Details: [`ui/README.md`](ui/README.md). This closes the last open item in
+[`docs/pipeline-review.md`](docs/pipeline-review.md) §9.

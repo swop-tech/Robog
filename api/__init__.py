@@ -2,10 +2,11 @@
 
 This package is **Bonus 01**: the retrieval engine (``retrieve/``) and the
 answer composer (``answer/``) exposed as a small FastAPI service, so any client
--- the web chat, a Telegram bot, ``curl``, the CLI client in ``api/client.py``
--- talks to the same four endpoints:
+-- the web chat (served at ``GET /``), a Telegram bot, ``curl``, the CLI client
+in ``api/client.py`` -- talks to the same endpoints:
 
 ==============================  =======================================================
+``GET  /``                      the zero-build web chat (browser) / endpoint index (API client)
 ``GET  /search``                hybrid retrieval: ``SearchResult.to_dict()`` + ``image_url``
 ``POST /ask``                   full RAG pipeline: answer, citations, figures, params,
                                 verification, cross-lingual disclosure
@@ -17,7 +18,7 @@ Quick start::
 
     pip install -r requirements-api.txt
     python -m ingest.run --data data
-    python -m api                        # http://localhost:8000/docs
+    python -m api                        # http://localhost:8000 — chat at /, docs at /docs
     python -m api.client "Wieviel Zuladung hat der FlashBot?"
 
 Nothing here re-implements retrieval or answering: ``api/service.py`` holds the

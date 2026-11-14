@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
 
     host, port = args.host or settings.host, args.port or settings.port
     print(f"Robog API on http://{host}:{port}  (docs: http://{host}:{port}/docs)")
+    print(f"  chat    http://{host}:{port}/  (open in a browser)")
     print(f"  data    {settings.data_dir}")
     print(f"  indexes {settings.chunks_path.parent}")
     print(f"  client  python -m api.client --port {port} \"Wieviel Zuladung hat der FlashBot?\"")

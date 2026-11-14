@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Robog — ask the robot manuals</title>
+  <meta name="description" content="Manual-grounded answers about PUDU robots, in English, German and Italian. Every claim cited, every number verified, every figure shown." />
+  <meta name="color-scheme" content="light" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Crect x='8' y='11' width='16' height='12' rx='3' fill='white'/%3E%3Ccircle cx='13' cy='17' r='2' fill='%234f46e5'/%3E%3Ccircle cx='19' cy='17' r='2' fill='%234f46e5'/%3E%3Crect x='14.5' y='6' width='3' height='5' rx='1.5' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#input">Skip to the question box</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30">
+          <rect width="32" height="32" rx="9" fill="currentColor"/>
+          <rect x="8" y="11" width="16" height="12" rx="3.5" fill="#fff"/>
+          <circle cx="13" cy="17" r="2.1" fill="currentColor"/>
+          <circle cx="19" cy="17" r="2.1" fill="currentColor"/>
+          <rect x="14.4" y="5.5" width="3.2" height="5.5" rx="1.6" fill="#fff"/>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <strong>Robog</strong>
+        <small>manual-grounded robot answers</small>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <span id="status" class="status status--loading" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span><span class="status-label">connecting…</span>
+      </span>
+      <button id="new-chat" class="ghost-btn" type="button" title="Start a new chat" hidden>New chat</button>
+      <a class="ghost-btn" href="/docs" target="_blank" rel="noopener">API docs ↗</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Welcome / starter prompts -->
+    <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+      <p class="eyebrow">Telmekom Challenge 2026 · EN / DE / IT</p>
+      <h1 id="welcome-title">Ask the manuals anything.</h1>
+      <p class="lede">
+        Exact specs for technicians, plain-language comparisons for everyone else, answers in your
+        language, and the diagram when you need to see it. Every claim is cited to a manual page and
+        every number is checked against the source.
+      </p>
+
+      <div class="chips" id="chips" role="list" aria-label="Starter prompts">
+        <button class="chip" role="listitem" type="button"
+                data-question="Wieviel Zuladung hat der FlashBot?">
+          <span class="chip-icon chip-icon--lookup" aria-hidden="true">⌖</span>
+          <span class="chip-body">
+            <span class="chip-tag">Technician · exact lookup <b>DE</b></span>
+            <span class="chip-q">“Wieviel Zuladung hat der FlashBot?”</span>
+            <span class="chip-note">Structured parameter index → the exact value, cited to the page.</span>
+          </span>
+        </button>
+
+        <button class="chip" role="listitem" type="button"
+                data-question="Which robot fits a busy restaurant best?">
+          <span class="chip-icon chip-icon--advisory" aria-hidden="true">⚖</span>
+          <span class="chip-body">
+            <span class="chip-tag">Non-technical · advisory <b>EN</b></span>
+            <span class="chip-q">“Which robot fits a busy restaurant best?”</span>
+            <span class="chip-note">Product profile cards compared side by side, in plain language.</span>
+          </span>
+        </button>
+
+        <button class="chip" role="listitem" type="button"
+                data-question="Qual è la velocità massima del FlashBot?">
+          <span class="chip-icon chip-icon--cross" aria-hidden="true">🌐</span>
+          <span class="chip-body">
+            <span class="chip-tag">Cross-lingual · Bonus 02 <b>IT→EN/DE</b></span>
+            <span class="chip-q">“Qual è la velocità massima del FlashBot?”</span>
+            <span class="chip-note">Italian question, EN/DE manual — answered in Italian, sources disclosed.</span>
+          </span>
+        </button>
+
+        <button class="chip" role="listitem" type="button"
+                data-question="Show me the component diagram of BellaBot">
+          <span class="chip-icon chip-icon--figure" aria-hidden="true">▦</span>
+          <span class="chip-body">
+            <span class="chip-tag">Visual · diagram lookup <b>EN</b></span>
+            <span class="chip-q">“Show me the component diagram of BellaBot”</span>
+            <span class="chip-note">The labeled figure, rendered inline with its callout legend.</span>
+          </span>
+        </button>
+      </div>
+
+      <p class="welcome-foot">
+        Or type your own question below — Robog replies in the language you ask in.
+      </p>
+    </section>
+
+    <!-- Conversation -->
+    <section id="chat" class="chat" aria-label="Conversation" hidden>
+      <div id="messages" class="messages" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <!-- Composer -->
+  <footer class="composer">
+    <form id="composer" class="composer-form" autocomplete="off">
+      <textarea id="input" name="question" rows="1" maxlength="2000"
+                placeholder="Ask about a robot… (English, Deutsch, Italiano)"
+                aria-label="Your question"></textarea>
+      <button id="send" class="send-btn" type="submit" aria-label="Send question" disabled>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z"/>
+        </svg>
+      </button>
+    </form>
+    <p class="composer-hint">
+      <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line ·
+      answers are grounded in the manuals and verified before they reach you.
+    </p>
+  </footer>
+
+  <!-- Citation detail modal -->
+  <div id="citation-overlay" class="overlay" hidden>
+    <div class="overlay-backdrop" data-close="citation"></div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="citation-title">
+      <button class="modal-x" type="button" data-close="citation" aria-label="Close citation">×</button>
+      <div id="citation-content"></div>
+    </div>
+  </div>
+
+  <!-- Raw /search JSON drawer (Bonus 01, live) -->
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawer-title">Raw <code>/search</code> JSON</h2>
+        <p class="drawer-sub">Bonus 01 — the retrieval engine as a standalone service. This is the
+          unedited <code>GET /search</code> response for the question.</p>
+      </div>
+      <button class="modal-x" type="button" data-close="drawer" aria-label="Close drawer">×</button>
+    </div>
+    <div class="drawer-url">
+      <code id="drawer-url"></code>
+      <div class="drawer-url-actions">
+        <button id="drawer-rerun" class="mini-btn" type="button">↻ Re-run live</button>
+        <button id="drawer-copy" class="mini-btn" type="button">Copy JSON</button>
+      </div>
+    </div>
+    <div id="drawer-meta" class="drawer-meta"></div>
+    <pre id="drawer-json" class="json" tabindex="0"></pre>
+  </aside>
+  <div id="drawer-backdrop" class="drawer-backdrop" data-close="drawer" hidden></div>
+
+  <!-- Figure lightbox -->
+  <div id="lightbox" class="overlay overlay--lightbox" hidden>
+    <div class="overlay-backdrop" data-close="lightbox"></div>
+    <figure class="lightbox-figure" role="dialog" aria-modal="true" aria-label="Figure, full size">
+      <button class="modal-x modal-x--light" type="button" data-close="lightbox" aria-label="Close figure">×</button>
+      <img id="lightbox-img" alt="" />
+      <figcaption id="lightbox-caption"></figcaption>
+    </figure>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>
