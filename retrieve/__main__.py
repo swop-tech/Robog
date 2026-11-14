@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--chunks", default="build/chunks.jsonl")
     parser.add_argument("--params", default="build/params.jsonl")
+    parser.add_argument("--profiles", default="build/profiles.jsonl")
     parser.add_argument("--vector", action="store_true",
                         help="fuse dense results from Chroma (needs 'python -m ingest.embed_index' to have run; "
                              "falls back to keyword-only with a warning)")
@@ -61,7 +62,9 @@ def main() -> None:
         except VectorStoreUnavailable as exc:
             # Demo-safe: keyword retrieval still works, the warning says why.
             print(f"warning: dense retrieval disabled: {exc}", file=sys.stderr)
-    engine = SearchEngine.from_build(args.chunks, args.params, vector=retriever)
+    engine = SearchEngine.from_build(
+        args.chunks, args.params, profiles_path=args.profiles, vector=retriever
+    )
     result = engine.search(
         args.query,
         k=args.k,
@@ -80,6 +83,27 @@ def main() -> None:
     if result.notes:
         for note in result.notes:
             print(f"Note: {note}")
+
+    if result.profiles:
+        print("\nProduct profiles:")
+        for prof in result.profiles:
+            specs = [
+                f"{label}: {val}"
+                for label, val in (
+                    ("payload", prof.payload),
+                    ("tanks", prof.record.get("tank_or_dustbin")),
+                    ("dims", prof.dimensions),
+                    ("weight", prof.weight),
+                    ("battery/runtime", prof.battery_runtime),
+                    ("speed", prof.speed),
+                    ("min width", prof.min_passage_width),
+                )
+                if val
+            ]
+            spec_str = " | ".join(specs[:5])
+            print(f"  • {prof.product} [{prof.category}] ({prof.score:.2f}) — {spec_str}")
+            print(f"    {prof.key_use_case[:220]}")
+            print(f"    ↳ {prof.citation}")
 
     if result.params:
         print("\nParameter index:")

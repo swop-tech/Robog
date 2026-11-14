@@ -19,7 +19,7 @@ source-grounded answers for both technicians and non-technical users.
 | Layer | Choice |
 |---|---|
 | Data processing | Plain Python (`ingest/`), no dependencies |
-| Retrieval | Plain Python (`retrieve/`): BM25 + parameter index + language policy, no dependencies |
+| Retrieval | Plain Python (`retrieve/`): BM25 + parameter index + product profile cards + figure route + language policy, no dependencies |
 | Embeddings | `gemini-embedding-2` (free tier) or `multilingual-e5-small` (offline) — pluggable |
 | Vector DB | Chroma (embedded) |
 | RAG framework | LlamaIndex (retrieval + answering, phase 3) |
@@ -28,17 +28,19 @@ source-grounded answers for both technicians and non-technical users.
 ## Data processing (phase 1 — done, tested on the real dataset)
 
 ```bash
-# run the tests (40 tests, stdlib only)
+# run the tests (stdlib only)
 python -m unittest tests.test_ingest -v
 
 # clean + chunk the manuals -> build/chunks.jsonl
 #   + parameter index      -> build/params.jsonl
+#   + product profiles     -> build/profiles.jsonl
 #   + validation report    -> build/data-report.md   (non-zero exit on errors)
 python -m ingest.run --data data
 ```
 
-**On the real dataset: 63 markdown files → 1,351 chunks (706 text · 169 table · 476 figure)
-and 2,039 structured parameter rows. Validation: 0 errors, 1 warning.**
+**On the real dataset: 63 markdown files → 1,351 chunks (706 text · 169 table · 476 figure),
+2,039 structured parameter rows, and 38 localized product profile cards across all 13 robots.
+Validation: 0 errors, 1 warning.**
 Details, metadata schema and the quirks handled: [`docs/data-processing.md`](docs/data-processing.md).
 
 Every chunk carries its full citation trail: `doc_id`, `product`, `doc_type`
@@ -53,22 +55,25 @@ and the relevant image; tables additionally become rows in the parameter index
 ```bash
 python -m ingest.run --data data                          # build the local indexes first
 python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonus 01)
-python -m retrieve.evaluate                               # 20-question benchmark
-python -m unittest tests.test_retrieve -v                 # 37 tests
+python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
+python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
+python -m retrieve.evaluate                               # 28-question benchmark
+python -m unittest discover -s tests -p "test_*.py"       # 129 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
-structured parameter index for exact values, a domain lexicon (payload ≈ Zuladung ≈ carico) and a
-per-question language policy (user's language first, cross-lingual fallback for the manuals
-without one). On a small 20-question keyword-matching benchmark (EN/DE/IT, both personas):
+structured parameter index for exact values, structured product profile cards across all 13 robots
+for advisory/comparison queries, a `figure` route for visual requests, a domain lexicon
+(payload ≈ Zuladung ≈ carico), and a per-question language policy (user's language first,
+cross-lingual fallback for the manuals without one). On the 28-question benchmark (EN/DE/IT,
+lookup + figure + procedure + advisory):
 
-| Configuration | Pass@8 | Hits in question language | Cross-language duplicates |
-|---|---|---|---|
-| every language at once (naive RAG) | 100% | 68% | 12% |
-| user's language only (hard filter) | 85% | 85% | 0% |
-| **same language first, fallback** | **100%** | **85%** | **0%** |
+| Configuration | Pass@8 | MRR | Hits in question language | Cross-language duplicates | Param index hit | Profile card hit |
+|---|---|---|---|---|---|---|
+| every language at once (naive RAG) | 100% | 0.92 | 52% | 18% | 100% | 100% |
+| user's language only (hard filter) | 82% | 0.82 | 86% | 0% | 80% | 86% |
+| **same language first, fallback** | **100%** | **0.95** | **85%** | **0%** | **100%** | **100%** |
 
-These checks do not establish answer correctness; advisory cases only check product diversity.
 Details: [`docs/retrieval.md`](docs/retrieval.md).
 
 ## Embedding + indexing (phase 3 — dense layer)
@@ -87,10 +92,10 @@ The dense path is optional and requires a compatible built index and embedding p
 The local model must be downloaded before it can run offline. End-to-end embedding quality
 has not been validated by the keyword-only benchmark above. The API and answer composer remain work in progress.
 
-## Known gap: images are indexed but not yet viewable
+## Known gap: images are retrieved with language-correct paths, not yet served over HTTP
 
-All 476 figures are indexed as their own chunks with a resolvable `image` path and a `Labels:`
-legend, so retrieval already selects the right picture — but there is no media endpoint, no
-"show me a picture of X" route, and no UI that renders it. Deferred on purpose, specced in
-[`docs/pipeline-review.md` §9a](docs/pipeline-review.md#9a-deferred-making-images-actually-usable-g6)
-(media endpoint + figure route + language-correct image choice), to be built together with the API.
+All 476 figures are indexed as their own chunks with a resolvable `image` path and parsed `labels`
+legend, and the `figure` route (`G6`) now selects language-appropriate overview/callout diagrams in
+EN, DE, and IT (falling back to EN when a manual lacks Italian). Still pending in the next step:
+the FastAPI media endpoint (`GET /media/...`) and UI rendering, specced in
+[`docs/pipeline-review.md` §9a](docs/pipeline-review.md#9a-deferred-making-images-actually-usable-g6).

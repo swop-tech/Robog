@@ -21,6 +21,7 @@ from retrieve.evaluate import CONFIGS, evaluate
 from retrieve.lang import detect_language, plan
 from retrieve.lexicon import expand_tokens
 from retrieve.params import ParamIndex
+from retrieve.profiles import ProfileIndex
 from retrieve.router import route
 from retrieve.text import fold, numbers, tokenize
 
@@ -76,6 +77,10 @@ class LanguageTests(unittest.TestCase):
             "In welcher Abbildung ist der Notausschalter?": "de",
             "Gewicht?": "de",
             "Peso?": "it",
+            "Show me a picture of the BellaBot": "en",
+            "Zeig mir ein Bild vom FlashBot": "de",
+            "Mostrami una foto del FlashBot": "it",
+            "Compare BellaBot vs FlashBot": "en",
         }
         for text, expected in cases.items():
             self.assertEqual(detect_language(text), expected, text)
@@ -104,6 +109,17 @@ class RouterTests(unittest.TestCase):
     def test_lookup(self):
         self.assertEqual(route("What is the payload of the FlashBot?", "en").kind, "lookup")
         self.assertEqual(route("Wie hoch ist die Akkukapazität?", "de").kind, "lookup")
+
+    def test_figure_multilingual(self):
+        self.assertEqual(route("Show me a picture of the BellaBot", "en").kind, "figure")
+        self.assertEqual(route("What does the KettyBot Pro look like?", "en").kind, "figure")
+        self.assertEqual(route("Which figure shows the emergency stop switch?", "en").kind, "figure")
+        self.assertEqual(route("Zeig mir ein Bild vom FlashBot", "de").kind, "figure")
+        self.assertEqual(route("Wie sieht der PUDU T300 aus?", "de").kind, "figure")
+        self.assertEqual(route("In welcher Abbildung ist der Notausschalter?", "de").kind, "figure")
+        self.assertEqual(route("Mostrami una foto della stazione di ricarica CC1", "it").kind, "figure")
+        self.assertEqual(route("Com'è fatto il PuduBot 2?", "it").kind, "figure")
+        self.assertEqual(route("Quale figura mostra il pulsante?", "it").kind, "figure")
 
     def test_advisory(self):
         self.assertEqual(route("Which robot is best for a hotel?", "en").kind, "advisory")
@@ -175,6 +191,199 @@ class ParamIndexTests(unittest.TestCase):
         hits = self.index.search("zuladung", k=2, extra_tokens=expand_tokens(["zuladung"]))
         self.assertTrue(hits)
         self.assertIn(hits[0].value, {"20 kg"})
+
+
+class ProfileIndexTests(unittest.TestCase):
+    CARDS = [
+        {
+            "id": "profile-bellabot-en",
+            "product": "BellaBot",
+            "doc_type": "robot",
+            "language": "en",
+            "category": "delivery",
+            "title": "BellaBot User Manual",
+            "dimensions": "565x537x1290 mm",
+            "weight": "55 kg",
+            "payload": "10 kg/layer (Four)",
+            "trays_or_compartments": "Four",
+            "tank_or_dustbin": None,
+            "battery_runtime": "25.6 Ah / 12-24 h",
+            "charging_time": "4.5 h",
+            "speed": "0.2-1.2 m/s",
+            "min_passage_width": "70 cm",
+            "navigation": "Laser and visual SLAM",
+            "operating_modes": ["Delivery Mode", "Birthday Mode"],
+            "special_features": ["voice_interaction", "tray_detection"],
+            "environments": ["restaurant_dining"],
+            "key_use_case": "BellaBot is an indoor delivery robot for restaurants.",
+            "card_text": "BellaBot [delivery] | payload: 10 kg/layer | min passage: 70 cm",
+            "image": "images/en-p003R-fig01.png",
+            "overview_chunk_id": "ov-bella",
+            "spec_chunk_id": "sp-bella",
+            "chunk_ids": ["ov-bella", "sp-bella"],
+            "pages": [2, 3],
+            "source_pdf": "BellaBot.pdf",
+        },
+        {
+            "id": "profile-bellabot-it",
+            "product": "BellaBot",
+            "doc_type": "robot",
+            "language": "it",
+            "category": "delivery",
+            "title": "BellaBot User Manual",
+            "dimensions": "565x537x1290 mm",
+            "weight": "55 kg",
+            "payload": "10 kg/strato",
+            "trays_or_compartments": "4",
+            "tank_or_dustbin": None,
+            "battery_runtime": "25,6 Ah / 12-24 h",
+            "charging_time": "4,5 h",
+            "speed": "0,2-1,2 m/s",
+            "min_passage_width": "70 cm",
+            "navigation": "SLAM laser e visivo",
+            "operating_modes": ["Modalità di consegna"],
+            "special_features": ["voice_interaction"],
+            "environments": ["restaurant_dining"],
+            "key_use_case": "BellaBot è un robot per consegne al chiuso nei ristoranti.",
+            "card_text": "BellaBot [delivery] | payload: 10 kg/strato",
+            "image": "images/it-p026L-fig01.png",
+            "overview_chunk_id": "ov-bella-it",
+            "spec_chunk_id": "sp-bella-it",
+            "chunk_ids": ["ov-bella-it", "sp-bella-it"],
+            "pages": [47, 48],
+            "source_pdf": "BellaBot.pdf",
+        },
+        {
+            "id": "profile-cc1-en",
+            "product": "PUDU CC1",
+            "doc_type": "robot",
+            "language": "en",
+            "category": "cleaning",
+            "title": "PUDU CC1 User Manual",
+            "dimensions": "629x552x695 mm",
+            "weight": "75 kg",
+            "payload": None,
+            "trays_or_compartments": None,
+            "tank_or_dustbin": "Solution tank: 15 L; Wastewater tank: 15 L",
+            "battery_runtime": "50 Ah / 5 h",
+            "charging_time": "3 h",
+            "speed": "0.2-1.2 m/s",
+            "min_passage_width": "70 cm",
+            "navigation": "Visual + Laser SLAM",
+            "operating_modes": ["Scrubbing", "Sweeping"],
+            "special_features": ["floor_scrubbing_sweeping", "auto_water_refill_drain"],
+            "environments": ["floor_cleaning", "retail_supermarket"],
+            "key_use_case": "PUDU CC1 is a versatile cleaning robot for sweeping and scrubbing.",
+            "card_text": "PUDU CC1 [cleaning] | tanks: 15 L",
+            "image": "images/en-cc1.png",
+            "overview_chunk_id": "ov-cc1",
+            "spec_chunk_id": "sp-cc1",
+            "chunk_ids": ["ov-cc1", "sp-cc1"],
+            "pages": [2, 3],
+            "source_pdf": "CC1.pdf",
+        },
+        {
+            "id": "profile-t300-en",
+            "product": "PUDU T300",
+            "doc_type": "robot",
+            "language": "en",
+            "category": "industrial_delivery",
+            "title": "PUDU T300 User Manual",
+            "dimensions": "835x500x1350 mm",
+            "weight": "65 kg",
+            "payload": "300 kg",
+            "trays_or_compartments": None,
+            "tank_or_dustbin": None,
+            "battery_runtime": "30 Ah / 12 h",
+            "charging_time": "2 h",
+            "speed": "0.2-1.2 m/s",
+            "min_passage_width": "60 cm",
+            "navigation": "VSLAM + Laser SLAM",
+            "operating_modes": ["Delivery mode"],
+            "special_features": ["heavy_industrial_payload"],
+            "environments": ["industrial_warehouse"],
+            "key_use_case": "PUDU T300 is an industrial material transfer robot carrying 300 kg.",
+            "card_text": "PUDU T300 [industrial_delivery] | payload: 300 kg",
+            "image": "images/en-t300.png",
+            "overview_chunk_id": "ov-t300",
+            "spec_chunk_id": "sp-t300",
+            "chunk_ids": ["ov-t300", "sp-t300"],
+            "pages": [2, 3],
+            "source_pdf": "T300.pdf",
+        },
+        {
+            "id": "profile-flashbot-en",
+            "product": "FlashBot",
+            "doc_type": "robot",
+            "language": "en",
+            "category": "delivery",
+            "title": "FlashBot User Manual V1.0",
+            "dimensions": "53.8x53.4x105.2 cm",
+            "weight": "57 kg",
+            "payload": "20 kg (10 kg per tray)",
+            "trays_or_compartments": "2 ~ 4 (Adjustable)",
+            "tank_or_dustbin": None,
+            "battery_runtime": "10 Ah / 9 h",
+            "charging_time": "4.5 h",
+            "speed": "1.2 m/s",
+            "min_passage_width": "70 cm",
+            "navigation": "Laser SLAM",
+            "operating_modes": ["Delivery mode", "Escorting mode"],
+            "special_features": ["elevator_control", "enclosed_compartments"],
+            "environments": ["hotel_hospitality", "multi_floor_elevator"],
+            "key_use_case": "FlashBot building delivery robot with optional elevator control.",
+            "card_text": "FlashBot [delivery] | elevator_control enclosed_compartments",
+            "image": "images/en-flashbot.png",
+            "overview_chunk_id": "ov-flash",
+            "spec_chunk_id": "sp-flash",
+            "chunk_ids": ["ov-flash", "sp-flash"],
+            "pages": [3, 5],
+            "source_pdf": "FlashBot.pdf",
+        },
+    ]
+
+    def setUp(self):
+        self.index = ProfileIndex(self.CARDS)
+
+    def test_restaurant_query_ranks_delivery_first(self):
+        hits = self.index.search("Which robot fits my restaurant?", language="en")
+        self.assertEqual(hits[0].product, "BellaBot")
+        self.assertEqual(hits[0].category, "delivery")
+
+    def test_cleaning_query_ranks_cleaning_first(self):
+        hits = self.index.search("Which robot is best for floor scrubbing in a supermarket?", language="en")
+        self.assertEqual(hits[0].product, "PUDU CC1")
+        self.assertEqual(hits[0].category, "cleaning")
+
+    def test_numeric_payload_constraint_boosts_t300(self):
+        hits = self.index.search("Which robot can carry 250 kg in a warehouse?", language="en")
+        self.assertEqual(hits[0].product, "PUDU T300")
+
+    def test_cross_lingual_capability_surfaces_flashbot_in_italian(self):
+        hits = self.index.search(
+            "Quale robot può prendere l'ascensore in hotel?",
+            language="it",
+            extra_tokens=expand_tokens(["ascensore", "hotel"]),
+        )
+        self.assertEqual(hits[0].product, "FlashBot")
+        self.assertTrue(hits[0].cross_lingual)
+        # Hard filter suppresses cross-lingual cards
+        strict = self.index.search(
+            "Quale robot può prendere l'ascensore in hotel?",
+            language="it",
+            cross_lingual_fallback=False,
+            extra_tokens=expand_tokens(["ascensore", "hotel"]),
+        )
+        self.assertNotIn("FlashBot", [h.product for h in strict])
+
+    def test_catalog_returns_all_robots_with_fallback(self):
+        cat_it = self.index.catalog("it", cross_lingual_fallback=True)
+        self.assertEqual(len(cat_it), 4)
+        by_prod = {h.product: h for h in cat_it}
+        self.assertEqual(by_prod["BellaBot"].language, "it")
+        self.assertFalse(by_prod["BellaBot"].cross_lingual)
+        self.assertEqual(by_prod["FlashBot"].language, "en")
+        self.assertTrue(by_prod["FlashBot"].cross_lingual)
 
 
 @unittest.skipUnless((DATA / "manuals").exists(), "dataset not present")
@@ -252,9 +461,84 @@ class EngineTests(unittest.TestCase):
 
     def test_json_shape(self):
         payload = self.engine.search("What is the payload of the FlashBot?", k=2).to_dict()
-        for key in ("query", "language", "route", "policy", "confidence", "hits", "params"):
+        for key in ("query", "language", "route", "policy", "confidence", "hits", "params", "profiles"):
             self.assertIn(key, payload)
         self.assertIn("citation", payload["hits"][0])
+        self.assertIn("labels", payload["hits"][0])
+
+    def test_figure_overview_en_de_it(self):
+        en = self.engine.search("Show me a picture of the BellaBot", k=3)
+        self.assertEqual(en.route, "figure")
+        self.assertEqual(en.hits[0].chunk_type, "figure")
+        self.assertEqual(en.hits[0].product, "BellaBot")
+        self.assertEqual(en.hits[0].language, "en")
+        self.assertTrue((en.hits[0].image or "").startswith("images/en-"))
+        self.assertIn("2.3", en.hits[0].section)
+
+        de = self.engine.search("Zeig mir ein Bild vom FlashBot", k=3)
+        self.assertEqual(de.route, "figure")
+        self.assertEqual(de.hits[0].chunk_type, "figure")
+        self.assertEqual(de.hits[0].product, "FlashBot")
+        self.assertEqual(de.hits[0].language, "de")
+        self.assertTrue((de.hits[0].image or "").startswith("images/de-"))
+        self.assertIn("2.2", de.hits[0].section)
+
+        it = self.engine.search("Mostrami una foto della stazione di ricarica CC1", k=3)
+        self.assertEqual(it.route, "figure")
+        self.assertEqual(it.hits[0].chunk_type, "figure")
+        self.assertEqual(it.hits[0].product, "CC1 Charging Station")
+        self.assertEqual(it.hits[0].language, "it")
+        self.assertTrue((it.hits[0].image or "").startswith("images/it-"))
+
+    def test_figure_specific_component_keeps_topic(self):
+        res = self.engine.search("Which figure shows the emergency stop switch on the BellaBot?", k=3)
+        self.assertEqual(res.route, "figure")
+        self.assertEqual(res.hits[0].chunk_type, "figure")
+        self.assertIn("emergency stop switch", fold(res.hits[0].text))
+        self.assertTrue(res.hits[0].labels)
+
+    def test_figure_cross_lingual_fallback_prefers_en_for_flashbot_it(self):
+        res = self.engine.search("Mostrami una foto del FlashBot", k=3)
+        self.assertEqual(res.language, "it")
+        self.assertEqual(res.route, "figure")
+        self.assertTrue(res.cross_lingual)
+        self.assertEqual(res.hits[0].product, "FlashBot")
+        self.assertEqual(res.hits[0].language, "en")
+        self.assertTrue((res.hits[0].image or "").startswith("images/en-"))
+
+        strict = self.engine.search("Mostrami una foto del FlashBot", k=3, cross_lingual_fallback=False)
+        self.assertEqual(strict.hits, [])
+
+    def test_advisory_restaurant_returns_profiles_and_excludes_accessories(self):
+        res = self.engine.search("Which robot fits my restaurant?", k=5)
+        self.assertEqual(res.route, "advisory")
+        self.assertGreaterEqual(len(res.profiles), 5)
+        self.assertTrue(all(p.category == "delivery" for p in res.profiles[:5]))
+        prof_names = {p.product for p in res.profiles}
+        self.assertIn("BellaBot", prof_names)
+        self.assertIn("PuduBot 2", prof_names)
+        self.assertTrue(all(h.metadata.get("doc_type") == "robot" for h in res.hits))
+
+    def test_advisory_multi_product_comparison_preserves_both_products(self):
+        res = self.engine.search("BellaBot vs KettyBot Pro for a narrow restaurant", k=4)
+        self.assertEqual(res.route, "advisory")
+        self.assertIn("BellaBot", res.products)
+        self.assertIn("KettyBot Pro", res.products)
+        self.assertEqual([p.product for p in res.profiles], ["KettyBot Pro", "BellaBot"])
+
+    def test_advisory_numeric_300kg_ranks_t300_first(self):
+        res = self.engine.search("Which robot can carry 300 kg in a factory?", k=4)
+        self.assertEqual(res.route, "advisory")
+        self.assertEqual(res.profiles[0].product, "PUDU T300")
+        self.assertEqual(res.hits[0].product, "PUDU T300")
+
+    def test_advisory_cross_lingual_elevator_it_surfaces_flashbot(self):
+        res = self.engine.search("Quale robot può usare l'ascensore per consegnare in hotel?", k=5)
+        self.assertEqual(res.language, "it")
+        self.assertEqual(res.route, "advisory")
+        self.assertTrue(res.cross_lingual)
+        self.assertEqual(res.profiles[0].product, "FlashBot")
+        self.assertTrue(res.profiles[0].cross_lingual)
 
     def test_language_policy_beats_no_policy(self):
         questions = [
