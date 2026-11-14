@@ -82,3 +82,11 @@ python -m ingest.embed_index --provider gemini   # needs GEMINI_API_KEY (free)
 The dense path is optional and requires a compatible built index and embedding provider.
 The local model must be downloaded before it can run offline. End-to-end embedding quality
 has not been validated by the keyword-only benchmark above. The API and answer composer remain work in progress.
+
+## Known gap: images are indexed but not yet viewable
+
+All 476 figures are indexed as their own chunks with a resolvable `image` path and a `Labels:`
+legend, so retrieval already selects the right picture — but there is no media endpoint, no
+"show me a picture of X" route, and no UI that renders it. Deferred on purpose, specced in
+[`docs/pipeline-review.md` §9a](docs/pipeline-review.md#9a-deferred-making-images-actually-usable-g6)
+(media endpoint + figure route + language-correct image choice), to be built together with the API.
