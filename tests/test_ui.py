@@ -158,6 +158,18 @@ class ChatUiTest(unittest.TestCase):
         self.assertIn("javascript", js.headers["content-type"])
         self.assertIn("text/css", css.headers["content-type"])
 
+    def test_hidden_panels_stay_hidden(self) -> None:
+        """Dialogs start with ``hidden``; the stylesheet must not let a class un-hide them."""
+        import re
+
+        css = self.client.get("/ui/styles.css").text
+        self.assertRegex(css, r"\[hidden\]\s*\{\s*display:\s*none\s*!important")
+        page = self.client.get("/", headers={"Accept": "text/html"}).text
+        for element_id in ("citation-overlay", "drawer", "drawer-backdrop", "lightbox", "toast", "chat"):
+            tag = re.search(rf'<[a-z]+ id="{element_id}"[^>]*>', page)
+            self.assertIsNotNone(tag, element_id)
+            self.assertIn(" hidden", tag.group(0), element_id)
+
     def test_app_js_calls_the_service_endpoints(self) -> None:
         js = self.client.get("/ui/app.js").text
         for endpoint in ('"/ask"', "/search", "/health"):

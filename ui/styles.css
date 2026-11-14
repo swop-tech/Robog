@@ -1,5 +1,10 @@
 /* Robog web chat — zero-build, no framework. Light, high-contrast, projector-safe. */
 
+/* The page toggles panels with the `hidden` attribute. The browser's own
+   `[hidden]` rule loses to any class that sets `display` (.overlay, .drawer,
+   .toast …), which left every dialog open on load — so make it win. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #eef1f8;
   --bg-grad-1: #e9edfb;
