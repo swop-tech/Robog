@@ -7,7 +7,7 @@
 
 The engine is built once at startup and shared by every request; the offline
 answer formatter needs no API key, so the service demos without one
-(``ROBOG_LLM_PROVIDER=gemini`` + ``GEMINI_API_KEY`` switch on ``gemini-2.5-flash``).
+(``ROBOG_LLM_PROVIDER=gemini`` + ``GEMINI_API_KEY`` switch on ``gemini-3.8-flash``).
 """
 
 from __future__ import annotations
