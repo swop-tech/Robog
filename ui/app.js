@@ -628,8 +628,12 @@ async function submitQuestion(rawQuestion, { regenerateOf = null } = {}) {
     // A successful answer proves the index exists: clear a stale "not built"
     // banner instead of waiting for the next 60 s poll.
     if (ui.health && !ui.health.ready) refreshHealth({ quiet: true });
-    if (payload.provider === "offline") {
-      notify("Answered by the offline formatter — set GEMINI_API_KEY on the server for prose answers.", "warn");
+    // Say why the answer is quoted passages, with the server's own reason. It
+    // used to always blame a missing key, which is wrong when the key is set
+    // and the Gemini call or the evidence check failed.
+    if (payload.provider === "offline" && payload.fallback_reason) {
+      notify(`Quoted from the manuals instead of written by the model: ${payload.fallback_reason}.`, "warn");
+      refreshHealth({ quiet: true });
     }
   } else {
     const error = serializeError(askResult.reason);

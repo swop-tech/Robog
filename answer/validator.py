@@ -3,11 +3,14 @@
 Three deterministic post-checks run on every answer *before* it is returned,
 no matter who wrote it (Gemini or the offline formatter):
 
-1. **Citation check** -- every factual sentence carries at least one valid
-   reference (``[1]``, ``[2, 3]``) pointing into the retrieved evidence; a
-   citation of a ref that was never retrieved is an error. A sentence whose
-   citation is missing is repaired by attaching the best-matching ref, and only
-   dropped when nothing in the evidence supports it.
+1. **Citation check** -- every reference (``[1]``, ``[2, 3]``) must point into
+   the retrieved evidence; a citation of a ref that was never retrieved is an
+   error. A sentence without its own marker is covered by a citation later in
+   the same paragraph, or gets the best-matching ref attached. A sentence that
+   still has no source -- a greeting, a transition, "the manuals do not say" --
+   is **kept and reported as uncited**, so the answer reads like a conversation
+   and the verdict stays honest (``5/7 cited``). ``strict=True`` restores the
+   earlier rule: such a sentence is an error and is dropped.
 2. **Numeric verification** -- every number/unit in the answer must occur in the
    evidence (retrieved chunks + parameter rows + profile cards). A number that
    cannot be found is removed from the sentence and reported; the answer never
@@ -20,7 +23,11 @@ no matter who wrote it (Gemini or the offline formatter):
    answer *before* repairs, citations inside a quotation are neutralised first --
    otherwise an excerpt that quotes paragraphs containing our own ``[n]`` markers
    could never verify. A quote that cannot be found is unquoted into plain text
-   and reported.
+   and reported (a warning; an error under ``strict=True``).
+
+Only an **error** makes the composer discard a generated answer. That is
+reserved for what must never ship: a number the evidence does not contain and
+a citation of a source that was not retrieved.
 
 All checks are regex + set membership: cheap, language-agnostic and model-free,
 so a live demo can *show* verification instead of promising it.
@@ -149,9 +156,14 @@ class ValidationReport:
         An answer with no evidence passes every check vacuously (0/0 claims,
         0/0 numbers), and ``verified`` is then True for a reply that says
         "not in the manuals". Callers must not render that as a green pass --
-        a badge that certifies nothing is worse than no badge.
+        a badge that certifies nothing is worse than no badge. The same holds
+        for a reply that cites nothing and states no number (a greeting, a
+        clarifying question, "the manuals do not cover that"): nothing in it
+        was checked against a source.
         """
-        return bool(self.sentences_checked or self.numbers_checked or self.quotes_checked)
+        return bool(
+            self.sentences_cited or self.numbers_checked or self.quotes_checked or self.errors
+        )
 
     @property
     def citation_rate(self) -> float:
@@ -215,13 +227,18 @@ def validate_answer(
     *,
     language: str | None = None,
     repair: bool = True,
+    strict: bool = False,
 ) -> ValidationReport:
     """Run cite/number/quote checks over ``answer`` and return the cleaned answer.
 
     ``repair=True`` (default) removes unverifiable numbers, drops citations that
-    point at nothing, attaches a citation to an ungrounded claim or removes the
-    claim, and unquotes text that is not in the source. ``repair=False`` only
-    reports -- useful for measuring a generator without changing its output.
+    point at nothing, attaches a citation to a claim the evidence supports, and
+    unquotes text that is not in the source. ``repair=False`` only reports --
+    useful for measuring a generator without changing its output.
+
+    ``strict=False`` (default) keeps a sentence that has no source and reports
+    it as uncited. ``strict=True`` treats it -- and a misquote -- as an error
+    and removes the sentence.
     """
     language = language or evidence.language or "en"
     report = ValidationReport(answer=answer)
@@ -243,7 +260,7 @@ def validate_answer(
             out_lines.append(line)
             continue
         out_lines.append(
-            _check_line(line, evidence, known, report, language, repair)
+            _check_line(line, evidence, known, report, language, repair, strict)
         )
 
     report.answer = (_tidy("\n".join(out_lines)) if repair else answer).strip()
@@ -261,9 +278,10 @@ def _check_line(
     report: ValidationReport,
     language: str,
     repair: bool,
+    strict: bool = False,
 ) -> str:
     """Validate one line, keeping its markdown prefix and quoting intact."""
-    prefix_match = re.match(r"^(\s*(?:[-*•]|\d+\.)\s+)", line)
+    prefix_match = re.match(r"^(\s*(?:[-*•]|\d+[.)])\s+)", line)
     prefix = prefix_match.group(1) if prefix_match else ""
     body = line[len(prefix):] if prefix else line
     if not body.strip():
@@ -271,10 +289,12 @@ def _check_line(
 
     # The quote check needs the *original* text (quotes may span full sentences
     # and contain our own markers); quoting is neutralised inside citations.
-    body = _verify_quotes(body, evidence, report, _sentence_index(report), language, repair)
+    body = _verify_quotes(
+        body, evidence, report, _sentence_index(report), language, repair, strict
+    )
     body = _strip_invalid_citations(body, known, report, _sentence_index(report))
     body = _verify_numbers(body, evidence, report, _sentence_index(report), language, repair)
-    body = _ensure_citations(body, evidence, report, repair)
+    body = _ensure_citations(body, evidence, report, repair, strict)
     if not body.strip():
         return ""
     return prefix + body
@@ -291,6 +311,7 @@ def _verify_quotes(
     index: int,
     language: str,
     repair: bool,
+    strict: bool = False,
 ) -> str:
     cited = cited_refs(body)
     scope = evidence.texts_for(cited) if cited else [ref.support for ref in evidence.refs]
@@ -309,7 +330,10 @@ def _verify_quotes(
             return match.group(0)
         report.issues.append(
             Issue(
-                "quote", "error",
+                # Unquoting is a complete repair: the words stay, they are just
+                # no longer presented as the manual's own. Typical cause is a
+                # UI label translated into the answer language.
+                "quote", "error" if strict else "warning",
                 "quoted text does not appear verbatim in the cited source",
                 detail=quote[:160], sentence=index,
                 action="repaired" if repair else "flagged",
@@ -367,17 +391,34 @@ def _verify_numbers(
 
 
 def _ensure_citations(
-    body: str, evidence: Evidence, report: ValidationReport, repair: bool
+    body: str,
+    evidence: Evidence,
+    report: ValidationReport,
+    repair: bool,
+    strict: bool = False,
 ) -> str:
-    """Every claim needs a valid ``[n]``; attach the best ref or drop the claim."""
+    """Give every claim a source where the evidence has one; report the rest.
+
+    In order, for a sentence without its own ``[n]``:
+
+    1. a citation later in the same paragraph covers it -- "Hold the switch.
+       Then turn the key to OFF [2]." is one cited instruction, not one cited
+       and one uncited;
+    2. otherwise the best-matching ref is attached (and reported as a repair);
+    3. otherwise nothing supports it. By default the sentence is kept and
+       reported as uncited; under ``strict`` it is an error and is removed.
+    """
     sentences = split_sentences(body)
-    claim_sentences = [s for s in sentences if _is_claim(s) and not REFERENCE_LINE_RE.match(s)]
+    claim_sentences = [
+        s for s in sentences
+        if _is_claim(s) and not REFERENCE_LINE_RE.match(s) and not _is_conversational(s)
+    ]
     if not claim_sentences:
         return body
 
     appended: list[str] = []
     dropped: list[str] = []
-    for sentence in claim_sentences:
+    for position, sentence in enumerate(claim_sentences):
         index = report.sentences_checked
         report.sentences_checked += 1
         refs = _refs_in(sentence)
@@ -387,8 +428,20 @@ def _ensure_citations(
                 if n not in report.refs_used:
                     report.refs_used.append(n)
             continue
+        if any(_refs_in(later) for later in claim_sentences[position + 1:]):
+            report.sentences_cited += 1      # covered by the paragraph's citation
+            continue
         best = _best_ref(sentence, evidence)
         if best is None:
+            if not strict:
+                report.issues.append(
+                    Issue(
+                        "citation", "warning",
+                        "no source cited for this sentence",
+                        detail=sentence[:200], sentence=index, action="kept",
+                    )
+                )
+                continue
             report.issues.append(
                 Issue(
                     "citation", "error",
@@ -545,13 +598,31 @@ def _is_claim(sentence: str) -> bool:
     return bool(alnum_tokens(body))
 
 
+def _is_conversational(sentence: str) -> bool:
+    """True for a sentence that cannot be carrying a fact from the manuals.
+
+    Deliberately narrow, because whatever matches is not counted as a claim at
+    all: a question asked back to the user, and a short interjection ("Sure!",
+    "Gern geschehen!", "Of course."). Anything longer is counted and, when it
+    has no source, reported as uncited -- a wrong guess here must never hide a
+    fabricated claim. A sentence with a digit is always a claim.
+    """
+    stripped = sentence.strip().rstrip("*_ ")
+    if any(char.isdigit() for char in CITATION_RE.sub("", stripped)):
+        return False
+    if stripped.endswith("?"):
+        return True
+    words = alnum_tokens(stripped)
+    return len(words) <= 2 or (stripped.endswith("!") and len(words) <= 4)
+
+
 def _best_ref(sentence: str, evidence: Evidence):
     """The evidence ref that best supports a sentence (token overlap).
 
-    Two shared content words are required, and they must cover 30% of the
-    sentence: one coincidental word ("robot" appears in every passage) is not
-    support. Numeric literals count, so "it weighs 55 kg" attaches to the card
-    that states 55 kg.
+    Three shared content words (or a shared measured value) are required, and
+    they must cover 30% of the sentence: a coincidental word or two ("robot"
+    and the product name appear in every passage) is not support. Numeric
+    literals count, so "it weighs 55 kg" attaches to the card that states 55 kg.
     """
     from retrieve.text import ALL_STOPWORDS
 
@@ -575,9 +646,12 @@ def _best_ref(sentence: str, evidence: Evidence):
         ref_numbers = {value for value, _unit, _s, _e in iter_number_units(ref.support)}
         shared = words & ref_words
         shared_numbers = numbers & ref_numbers
-        # Two shared content words, or a shared measured value (a number is
-        # strong evidence on its own: "it weighs 55 kg").
-        if len(shared) < 2 and not shared_numbers:
+        # A shared measured value is strong evidence on its own ("it weighs
+        # 55 kg"). Without one, three shared content words are required: two is
+        # what an introduction shares with any passage on the same topic
+        # ("Here's how to clean your BellaBot" vs. a page that says "clean" and
+        # "BellaBot"), and attaching a source to that invents a citation.
+        if not shared_numbers and len(shared) < 3:
             continue
         overlap = (len(shared) + 2 * len(shared_numbers)) / len(tokens)
         if overlap > best_score:

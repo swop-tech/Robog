@@ -66,7 +66,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 295 tests
+python -m unittest discover -s tests -p "test_*.py"       # 341 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -109,6 +109,7 @@ python -m answer "Zeig mir ein Bild vom FlashBot" --show-evidence
 python -m answer "Which robot fits my restaurant?" --json       # the shape POST /ask will return
 python -m answer.evaluate --out build/answer-report.md          # 28-question answer benchmark
 python -m answer.evaluate --vector                              # same benchmark through the hybrid
+python -m answer --check                                        # is the model writing the answers? one real call
 ```
 
 `AnswerComposer` = retrieve → number the evidence → generate → **validate** → answer.
@@ -117,11 +118,18 @@ formatter otherwise (no key, no network, no model download) — the same formatt
 if the API fails or an answer cannot be repaired. The answer is always written in the question's
 language and says so when the evidence came from another language.
 
-Every answer is post-checked before it is returned (**G5**): every factual sentence must cite a
-retrieved chunk (`[1]`, `[2]` …), every number/unit must occur in the evidence (invented values are
-removed, value *and* unit compared), and quoted text must appear verbatim in the cited source.
-Bad claims are repaired, the LLM gets one retry with the failures named, and otherwise the
-formatter answers — an unvalidated answer never reaches a caller.
+Every answer is post-checked before it is returned (**G5**): every citation (`[1]`, `[2]` …) must
+point at a retrieved chunk, every number/unit must occur in the evidence (value *and* unit
+compared, `4.5 hours` = `4.5 h`), and quoted text must appear verbatim in the cited source. A wrong
+number or citation gets the LLM one retry with the failures named, and otherwise the formatter
+answers — an unvalidated answer never reaches a caller. A sentence with no source (a transition,
+"the manuals don't cover that") is kept and reported as uncited rather than costing the whole
+answer; `ROBOG_ANSWER_STRICT=1` restores the all-or-nothing rule.
+
+**If the chat reads like pasted manual paragraphs**, the offline formatter wrote the answer: it can
+only quote. Each such answer now says why (`fallback_reason`, shown on the chat card): no key, a
+failed Gemini call with the API's error, or a generated answer that failed the number check.
+`python -m answer --check` tests the key and model with one real call.
 
 On the 28-question benchmark, the offline formatter scores **100%** grounded, **100%** claims
 cited, **100%** numbers verified, **0** invented numbers, **100%** answer-language match and
@@ -143,7 +151,7 @@ curl 'localhost:8000/products?language=it&product=FlashBot&parameter=payload'
 curl -OJ localhost:8000/media/flashbot_user_manual_v1_0_multilanguage-de/de-p021R-fig01.png
 
 python -m api.client "Wieviel Zuladung hat der FlashBot?"   # 40-line second client
-python -m unittest tests.test_api -v                        # 63 tests
+python -m unittest tests.test_api -v                        # 67 tests
 ```
 
 The retrieval engine and the answer composer as a service, re-implementing nothing:
@@ -204,7 +212,7 @@ Built around the judging rubric:
   [`docs/ui-backend-gaps.md`](docs/ui-backend-gaps.md); every error path renders the API's own words.
 
 ```bash
-node --test ui/tests/*.test.js                                   # 202 frontend tests, no browser
+node --test ui/tests/*.test.js                                   # 208 frontend tests, no browser
 npm install --no-save jsdom                                      # dev-only: enables the 28 DOM tests
 ROBOG_LIVE_API=http://localhost:8000 node --test ui/tests/live.test.js   # end to end, real corpus
 ```

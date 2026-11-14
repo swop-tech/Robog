@@ -68,7 +68,53 @@ UNITS: tuple[str, ...] = (
     "mb", "gb", "tb", "kb", "°",
     # misc counts / grades
     "kg/h", "l/min", "ip54", "ip55", "ip65", "ip67", "v1", "v1.0", "v2",
+    # spelled-out units, as a person (or an LLM) writes them in a sentence
+    "kilogram", "kilograms", "kilogramm", "kilo", "kilos", "chilogrammo", "chilogrammi", "chili",
+    "gram", "grams", "gramm", "grammi",
+    "millimeter", "millimeters", "millimetre", "millimetres", "millimetro", "millimetri",
+    "centimeter", "centimeters", "centimetre", "centimetres", "zentimeter", "centimetro", "centimetri",
+    "meter", "meters", "metre", "metres", "metro", "metri",
+    "liter", "liters", "litre", "litres", "litro", "litri",
+    "volt", "volts", "watt", "watts",
+    "prozent", "percento",
+    "stunde", "std",
 )
+
+#: Different spellings of the same unit. The manuals print ``4.5 h``; a fluent
+#: answer says ``4.5 hours``, ``4,5 Stunden`` or ``4,5 ore``. Those are the same
+#: measurement, so both sides of the numeric check compare the canonical unit.
+#: Only pure renamings belong here -- never a conversion (``min`` is not ``h``).
+UNIT_SYNONYMS: dict[str, str] = {
+    **dict.fromkeys(("sec", "secs", "second", "seconds", "sekunde", "sekunden", "secondo", "secondi"), "s"),
+    **dict.fromkeys(("mins", "minute", "minutes", "minuten", "minuto", "minuti"), "min"),
+    **dict.fromkeys(("hr", "hrs", "hour", "hours", "stunde", "stunden", "std", "ora", "ore"), "h"),
+    **dict.fromkeys(
+        ("kilogram", "kilograms", "kilogramm", "kilo", "kilos", "chilogrammo", "chilogrammi", "chili"), "kg"
+    ),
+    **dict.fromkeys(("gram", "grams", "gramm", "grammi"), "g"),
+    **dict.fromkeys(
+        ("millimeter", "millimeters", "millimetre", "millimetres", "millimetro", "millimetri"), "mm"
+    ),
+    **dict.fromkeys(
+        ("centimeter", "centimeters", "centimetre", "centimetres", "zentimeter", "centimetro", "centimetri"),
+        "cm",
+    ),
+    **dict.fromkeys(("meter", "meters", "metre", "metres", "metro", "metri"), "m"),
+    **dict.fromkeys(("liter", "liters", "litre", "litres", "litro", "litri"), "l"),
+    **dict.fromkeys(("volt", "volts"), "v"),
+    **dict.fromkeys(("watt", "watts"), "w"),
+    **dict.fromkeys(("percent", "prozent", "percento"), "%"),
+    **dict.fromkeys(("m2",), "m²"),
+    **dict.fromkeys(("cm2",), "cm²"),
+    **dict.fromkeys(("mm2",), "mm²"),
+    **dict.fromkeys(("inch",), "in"),
+    **dict.fromkeys(("lbs",), "lb"),
+}
+
+
+def canonical_unit(unit: str) -> str:
+    """``"hours"`` / ``"stunden"`` / ``"ore"`` -> ``"h"`` (already-canonical units unchanged)."""
+    return UNIT_SYNONYMS.get(unit, unit)
 
 #: A number: ``20``, ``1.2``, ``29,2``, ``-20``, ``1 000``, ``4,5`` -- but not the
 #: digits inside a word (``IP54`` handled separately, ``T300``/``V1.0`` are names).
@@ -131,6 +177,9 @@ def iter_number_units(text: str) -> list[tuple[str, str, int, int]]:
     the same character positions for ASCII digits and units).
 
     ``"20 kg (10 kg pro Tablett)"`` -> ``[("20", "kg", 0, 5), ("10", "kg", 11, 16)]``
+
+    The unit is reported in its canonical spelling (:data:`UNIT_SYNONYMS`), so
+    ``"4.5 hours"``, ``"4,5 Stunden"`` and ``"4.5 h"`` all yield ``("4.5", "h")``.
     """
     folded = fold_aligned(text or "")
     found: list[tuple[str, str, int, int]] = []
@@ -148,11 +197,34 @@ def iter_number_units(text: str) -> list[tuple[str, str, int, int]]:
             # "m" must not match the "m" of "mm" or of a following word
             if candidate[0].isalnum() and after and (after.isalnum() or after in "/"):
                 continue
-            unit = candidate
+            unit_start = match.end() + spaces
+            if _is_ordinary_word(text, unit_start, candidate):
+                break       # "da 12 a 24 ore", "3 in total": a word, not a unit
+            unit = canonical_unit(candidate)
             unit_end = match.end() + spaces + len(candidate)
             break
         found.append((value, unit, match.start(), unit_end))
     return found
+
+
+def _is_ordinary_word(text: str, start: int, candidate: str) -> bool:
+    """True when a one/two-letter "unit" is really a word of the sentence.
+
+    Two symbols collide with everyday words: ``a`` (ampere, but also the
+    Italian preposition in ``da 12 a 24 ore``) and ``in`` (inch, but also
+    ``3 in total``). Ampere is written with a capital ``A``, so a lowercase
+    ``a`` is the preposition; ``in`` followed by another word is the
+    preposition too. Reading these as units made correct sentences fail the
+    numeric check. They fall back to a plain number, which is still verified
+    by value.
+    """
+    if candidate == "a":
+        return text[start: start + 1] == "a"
+    if candidate == "in":
+        following = text[start + 2: start + 3]
+        after_space = text[start + 3: start + 4]
+        return following == " " and after_space.isalpha()
+    return False
 
 
 def number_unit_pairs(text: str) -> set[tuple[str, str]]:

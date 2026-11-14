@@ -424,6 +424,52 @@ class ApiTest(unittest.TestCase):
         ).json()
         self.assertEqual(payload["provider"], "offline")
 
+    def test_ask_says_why_the_offline_formatter_answered(self) -> None:
+        payload = self.client.post(
+            "/ask", json={"question": "What is the payload of the FlashBot?", "provider": "offline"}
+        ).json()
+        self.assertIn("selected", payload["fallback_reason"])
+        # A reply that never involves the model (asking back) carries no reason.
+        asked_back = self.client.post(
+            "/ask", json={"question": "What is the value of this parameter?"}
+        ).json()
+        self.assertIsNone(asked_back["fallback_reason"])
+
+    def test_ask_keeps_a_conversational_generated_answer(self) -> None:
+        # The path the web chat is judged on: the model's own wording reaches the
+        # client, with the uncited sentence reported instead of the whole answer
+        # being swapped for quoted passages.
+        from answer.formatter import Draft
+
+        class Chatty:
+            name, model, last_error = "gemini", "fake-flash", None
+
+            def draft(self, prompt, evidence, *, language, route="default", question=""):
+                return Draft(
+                    "Good news, that one is easy.\n\nThe FlashBot carries 30 kg [1].",
+                    provider="gemini", model=self.model, language=language,
+                )
+
+        composer = self.service.composer_for()
+        original = composer.generator
+        composer.generator = Chatty()
+        try:
+            payload = self.client.post(
+                "/ask", json={"question": "What is the payload of the FlashBot?"}
+            ).json()
+        finally:
+            composer.generator = original
+        self.assertEqual(payload["provider"], "gemini")
+        self.assertTrue(payload["answer"].startswith("Good news, that one is easy."))
+        self.assertIn("30 kg [1]", payload["answer"])
+        self.assertIsNone(payload["fallback_reason"])
+        verification = payload["verification"]
+        self.assertTrue(verification["grounded"])
+        self.assertEqual(verification["state"], "repaired")          # amber, not green
+        self.assertEqual(
+            (verification["sentences_cited"], verification["sentences_checked"]), (1, 2)
+        )
+
     def test_ask_validates_its_body(self) -> None:
         self.assertEqual(self.client.post("/ask", json={}).status_code, 422)
         self.assertEqual(self.client.post("/ask", json={"question": ""}).status_code, 422)

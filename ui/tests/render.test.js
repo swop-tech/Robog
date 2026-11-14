@@ -19,6 +19,7 @@ import {
   crossLingualBadge,
   drawerBodyHTML,
   errorCardHTML,
+  fallbackNoteHTML,
   renderFigures,
   renderProfiles,
   renderSources,
@@ -380,9 +381,41 @@ describe("citationModalHTML", () => {
     assert.match(html, /No detail available for this reference/);
   });
 
+  test("an issue shows the sentence it is about", () => {
+    const html = renderVerification({
+      ...verification,
+      verified: false,
+      issues: [{ check: "citation", severity: "warning", message: "no source cited for this sentence",
+                 detail: "It only takes <b>a few</b> minutes.", sentence: 3, action: "kept" }],
+    });
+    assert.ok(html.includes("citation · kept"), html);
+    assert.ok(html.includes("It only takes &lt;b&gt;a few&lt;/b&gt; minutes."), html);   // escaped
+  });
+
   test("missing metadata renders an explicit dash inside the labelled grid", () => {
     const html = citationModalHTML({ ...citation, section: null, page: null }, { mediaUrl });
     assert.ok(html.includes("—"), html);
+  });
+});
+
+describe("fallbackNoteHTML — why the answer is quoted passages", () => {
+  test("the server's reason is shown on the card, escaped", () => {
+    const reason = "the LLM call failed: the model 'gemini-x' is not available <for this key>";
+    const html = assistantCardHTML(
+      { ...message, payload: { ...message.payload, provider: "offline", fallback_reason: reason } },
+      { mediaUrl },
+    );
+    assert.match(html, /class="fallback-note"/);
+    assert.ok(html.includes("not written by the model"), html);
+    assert.ok(html.includes("gemini-x"), html);
+    assert.ok(html.includes("&lt;for this key&gt;"), html);
+  });
+
+  test("no note when the model wrote the answer or no reason was given", () => {
+    assert.equal(fallbackNoteHTML({ provider: "gemini", fallback_reason: null }), "");
+    assert.equal(fallbackNoteHTML({ provider: "gemini", fallback_reason: "stale" }), "");
+    assert.equal(fallbackNoteHTML({ provider: "offline" }), "");       // asked back: deterministic by design
+    assert.equal(fallbackNoteHTML(null), "");
   });
 });
 
@@ -521,6 +554,22 @@ describe("statusChipHTML — GET /health, including the degraded states", () => 
     });
     assert.ok(chip.label.includes("hybrid"), chip.label);
     assert.ok(chip.label.includes("Gemini"), chip.label);
+  });
+
+  test("a configured Gemini whose last call failed is not reported as plain Gemini", () => {
+    const chip = statusChipHTML({
+      reachable: true, ready: true, vector_active: false,
+      provider: { provider: "gemini", last_error: "the model 'gemini-x' is not available for this API key" },
+    });
+    assert.ok(chip.label.includes("Gemini failing"), chip.label);
+    assert.ok(chip.title.includes("gemini-x"), chip.title);
+  });
+
+  test("offline: the tooltip says why", () => {
+    const chip = statusChipHTML({
+      reachable: true, ready: true, provider: { provider: "offline", reason: "GEMINI_API_KEY not set" },
+    });
+    assert.ok(chip.title.includes("GEMINI_API_KEY not set"), chip.title);
   });
 
   test("index missing: red, with the server's own detail", () => {

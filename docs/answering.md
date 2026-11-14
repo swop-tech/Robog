@@ -14,7 +14,7 @@ question (EN/DE/IT)
    ├─ 2. number the evidence         answer/evidence.py    [1] … [n], each with its citation trail
    ├─ 3. generate                    answer/llm.py         gemini-3.8-flash    OR  offline formatter
    ├─ 4. validate                    answer/validator.py   citation + numeric + quote checks  (G5)
-   ├─ 5. repair or regenerate        answer/composer.py    strip bad numbers, re-ask once, else offline
+   ├─ 5. repair or regenerate        answer/composer.py    re-ask once on a wrong number, else offline
    └─ 6. answer                      answer/composer.py    text + citations + figures + validation report
 ```
 
@@ -25,6 +25,7 @@ python -m answer "Zeig mir ein Bild vom FlashBot" --show-evidence
 python -m answer "Qual è la velocità massima del FlashBot?" --provider gemini
 python -m answer "Which robot fits my restaurant?" --json    # the shape POST /ask will return
 python -m answer.evaluate --out build/answer-report.md       # all 28 benchmark questions
+python -m answer --check                                     # one real call: is the model writing the answers?
 ```
 
 ```python
@@ -46,7 +47,7 @@ answer.grounded      # nothing had to be dropped, every claim is supported
 | Path | When | Cost |
 |---|---|---|
 | `gemini-3.8-flash` via `google-genai` | `GEMINI_API_KEY` present (already used by the embedding step) | Google AI Studio |
-| **deterministic grounded formatter** (`answer/formatter.py`) | no key, no `google-genai`, quota error, timeout, malformed response, **or a failed validation with no good retry** | free, instant, offline |
+| **deterministic grounded formatter** (`answer/formatter.py`) | no key, no `google-genai`, quota error, timeout, malformed response, **or an answer that still states an unverifiable number after one retry** | free, instant, offline |
 
 No LlamaIndex: the prompt, the evidence numbering and the verification are ours, so the
 framework would only add indirection. The model call is one `generate_content` request.
@@ -54,7 +55,24 @@ framework would only add indirection. The model call is one `generate_content` r
 `build_generator()` decides once per composer and reports it (`provider`, `model`, `offline`,
 `reason`), and the CLI/answer JSON say *why* it is offline (`GEMINI_API_KEY not set`,
 `google-genai not installed`, or the API error). A live demo can never die because the Wi-Fi,
-the quota or the key did — it degrades to a slightly less fluent answer with the same citations.
+the quota or the key did — it degrades to quoted passages with the same citations.
+
+### Why an answer reads like pasted paragraphs
+
+The formatter has no model behind it: it can select and quote passages, not explain them. So
+whenever it writes the answer, the chat looks like it is copying the data files. There are exactly
+three ways to end up there, and each one is now named on the answer (`fallback_reason` in `/ask`, a
+note on the chat card, a line in the CLI) instead of being a silent swap:
+
+| `fallback_reason` | Meaning | Fix |
+|---|---|---|
+| `GEMINI_API_KEY not set` · `google-genai not installed` · `ROBOG_LLM_PROVIDER is set to offline` | no model is configured | add the key to `.env`, `pip install -r requirements-rag.txt`, restart the API |
+| `the LLM call failed: …` | the call was made and failed: unknown model ID, rejected key, exhausted quota, empty response | the message carries the API's own error; `python -m answer --check` repeats the call and, for an unknown model, lists the IDs the key can use |
+| `the generated answer contained a number that is not in the retrieved manual passages` | the model answered and the evidence check rejected it, also after the retry | see §4; nothing to configure |
+
+The third row used to be much wider. One sentence without a citation ("It's a quick job."), one
+unit written out ("4.5 hours" for the manual's "4.5 h") or an honest "the manuals don't list a
+price" was enough to discard the model's whole answer, and nothing in the response said so.
 
 The fallback is not a stub. It renders, in the question's language:
 
@@ -88,6 +106,13 @@ or per-tray arithmetic — so the number check can verify every value.
 Limit: the offline formatter still cannot *judge* between robots. Once a scenario is given it lists the
 matching cards; it does not say which is better.
 
+### 1c. Small talk
+
+A message that is only a greeting or thanks (`hello`, `Grüß Gott`, `ciao`, `danke`, `grazie mille`)
+is answered with a short localized reply that says what Robog can help with. It used to go through
+retrieval like any question, and the closest passage for the word "hello" was pasted as the answer.
+The match is on the whole message, so "Hello, how do I clean the BellaBot?" is still a question.
+
 ## 2. More natural, multi-turn chat without changing the knowledge base
 
 The web chat now sends up to six previous **user questions** with each request.
@@ -99,10 +124,24 @@ current turn. `/ask` accepts at most eight history entries, and no conversation
 history is stored server-side. The documents and indexes remain the only source
 of factual claims.
 
-The generation instructions also ask the configured model for plain, helpful
-support-style prose instead of a terse report. That improves the Gemini path;
-when no Gemini key is configured, the offline formatter remains deterministic
-and deliberately more template-like while preserving exact citations and specs.
+The prompt (`answer/prompt.py`) asks the model for an explanation in its own
+words, shaped to the question (a fact, numbered steps, a comparison with a
+recommendation, troubleshooting checks), and tells it that the source passages
+are already displayed next to its reply, so repeating them adds nothing. It
+also states what the evidence check will reject, so a well-behaved answer
+passes on the first attempt.
+
+Two limits were starving the model and are gone:
+
+* each evidence item was cut at 900 characters, which truncated one chunk in
+  four mid-procedure (`"Step 5 Clean the v …"`). Items are now passed whole
+  (the longest chunk in the corpus is about 2,800 characters);
+* `max_output_tokens` was 1024. The Flash models reason before they write and
+  that reasoning counts against the same limit, so a longer question could
+  return no text at all. It is now 8192.
+
+When no Gemini key is configured, the offline formatter remains deterministic
+and quotes rather than explains, while preserving exact citations and specs.
 
 ## 3. Multilingual answering (Bonus 02)
 
@@ -135,9 +174,31 @@ membership: no model, no network, milliseconds — so they can be *shown*, not j
 
 | # | Check | Rule | On failure |
 |---|---|---|---|
-| 1 | **Citation** | every factual sentence carries `[n]` pointing at retrieved evidence | attach the best-matching ref (≥2 shared content words, or a shared measured value) — otherwise the claim is **dropped** |
-| 2 | **Numeric** | every number/unit occurs in the evidence (chunks + parameter rows + profile cards), value **and** unit | the number is **removed** from the sentence and reported; the answer never ships an invented spec |
-| 3 | **Quote** | text in `"…"` / `„…“` / `«…»` appears verbatim in the cited source (case/whitespace-insensitive, ellipsis-aware) | the text is **unquoted** and reported |
+| 1 | **Citation** | every `[n]` points at retrieved evidence | a marker for a source that was not retrieved is removed and is an **error** |
+| 1b | **Uncited sentence** | a sentence without `[n]` is covered by a citation later in the same paragraph, or gets the best-matching ref attached (a shared measured value, or ≥3 shared content words) | otherwise it is **kept and reported as uncited** (a warning); under strict mode it is an error and is dropped |
+| 2 | **Numeric** | every number/unit occurs in the evidence (chunks + parameter rows + profile cards), value **and** unit | an **error**; the number is removed from the sentence and reported; the answer never ships an invented spec |
+| 3 | **Quote** | text in `"…"` / `„…“` / `«…»` appears verbatim in the cited source (case/whitespace-insensitive, ellipsis-aware) | the text is **unquoted** and reported (a warning; an error under strict mode) |
+
+**Only an error discards a generated answer.** Errors are the two things that must never reach a
+user: a number the evidence does not contain, and a citation of a source that was not retrieved.
+
+### 4a. What "uncited" means, and the trade-off
+
+A chat answer contains sentences that state nothing from the manuals: a transition, a question
+back to the user, "the manuals I have don't cover that". The earlier rule treated every one of
+them as an ungrounded claim, dropped it, and then replaced the whole answer with the formatter's
+excerpts. Now such a sentence is kept, counted as *not cited* and listed in the verification panel
+with its text. The badge therefore reads `Grounded · 5/7 cited` (amber) rather than `Verified`
+(green), and an answer that cites nothing and states no number is shown as *Not answered from the
+manuals*, never as verified.
+
+What this gives up: a sentence that asserts something about a robot, with no number in it and no
+citation on it, is no longer removed. It is flagged, not blocked. The earlier rule did not really
+block it either (two words in common with any passage were enough to pass), but it was stricter in
+intent. If the demo should show the hard rule, set `ROBOG_ANSWER_STRICT=1` (or
+`AnswerComposer(strict=True)`): any sentence without a source discards the generated answer, as
+before. Expect many more formatter answers in that mode, and especially in the cross-lingual case,
+where an Italian sentence shares no words with a German passage.
 
 Details that matter in practice:
 
@@ -149,12 +210,22 @@ Details that matter in practice:
   (the number exists, the unit does not — reported as *"value appears in [3] with unit Ah"*).
 * **Decimal comma vs. point**: `25,6 Ah` (DE/IT) and `25.6 Ah` (EN) are the same measurement.
 * **Glued numbers**: a unit attached to letters (`V1.0`, `T300`, `IP54`) is not a claim.
+* **A unit written out is the same unit**: `4.5 h`, `4.5 hours`, `4,5 Stunden` and `4,5 ore` compare
+  equal (`UNIT_SYNONYMS` in `answer/evidence.py`). Only renamings are listed, never conversions:
+  `0.5 minutes` does not match `0.5 seconds`. Without this, every translated answer that mentioned a
+  duration failed the check.
+* **A preposition is not a unit**: `a` is ampere only as a capital `A`, and `in` is inch only when
+  no word follows, so `da 12 a 24 ore` and `3 in total` are read as plain numbers.
+* **Step ordinals are locators**: `Step 5` / `Schritt 5` / `Passo 5` is the position of an
+  instruction, which an answer may renumber when it merges steps.
+* **A question back to the user and a short interjection** (`Sure!`) are not claims. A digit
+  anywhere in the sentence makes it one again, so `Did you mean the 45 kg version?` is still checked.
 * A quotation that is really a bare measurement (`"20 kg"`) is treated as a numeric claim.
 
-If the LLM's answer cannot be repaired, the composer **re-asks once** with the concrete failures
-named in the prompt; if that also fails, the deterministic formatter answers and the response says
-`answered by the offline formatter after failed validation`. The caller never receives an
-unvalidated answer.
+If the LLM's answer contains an error, the composer **re-asks once** with the concrete failures
+named in the prompt and keeps whichever attempt has fewer; if an error remains, the deterministic
+formatter answers, the notes say `answered by the offline formatter after failed validation` and
+`fallback_reason` says what was wrong. The caller never receives an unvalidated answer.
 
 Each answer ships its own audit trail — this is the JSON contract for `POST /ask` (served by
 `api/app.py`; the endpoint adds `params` and a compact `verification`, see [`api.md`](api.md)):
@@ -197,19 +268,24 @@ answers — the offline formatter by default (no key), or Gemini with `--provide
 Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 (the report lists every question, its route, its check counters and any answer that failed).
 
+With `--provider gemini` the run also prints `written by the model: N/28` and, for every answer the
+formatter wrote instead, the reason and how often it occurred. That is the line to read when the chat
+still looks like pasted passages: it separates "the model is not being reached" from "the model's
+drafts are being rejected".
+
 ## 6. Layout
 
 | File | Role |
 |---|---|
 | `answer/evidence.py` | numbers the evidence, normalises numbers/units, collects profile/param/chunk refs |
-| `answer/validator.py` | the three checks + the repair actions (`validate_answer`) |
+| `answer/validator.py` | the three checks + the repair actions (`validate_answer`, `strict=`) |
 | `answer/formatter.py` | deterministic grounded answer, no model (the fallback and the baseline) |
-| `answer/llm.py` | `GeminiGenerator` / `OfflineGenerator`, `build_generator`, provider metadata |
-| `answer/prompt.py` | the grounding prompt (numbered evidence in, cited answer out) |
+| `answer/llm.py` | `GeminiGenerator` / `OfflineGenerator`, `build_generator`, provider metadata, `check_llm` (`--check`) |
+| `answer/prompt.py` | the grounding prompt (numbered evidence in, conversational cited answer out) |
 | `answer/composer.py` | retrieve → evidence → generate → validate → (re-ask | fall back) → `Answer` |
 | `answer/evaluate.py` | answer-level benchmark over the 28 questions |
 | `answer/strings.py` | the localized sentences Robog writes itself (EN/DE/IT) |
-| `tests/test_answer.py` | 78 tests: checks, formatter, generators, composer, evaluator, real corpus |
+| `tests/test_answer.py` | 117 tests: checks, formatter, generators, composer, evaluator, real corpus |
 
 ## 7. Known limits (and where they go)
 
@@ -221,7 +297,9 @@ Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 | `verified` is vacuously true for an answer grounded in nothing (0/0 claims) | `ValidationReport.checks_run` + `verification.state` in `/ask`; the UI renders a neutral badge instead of a green one |
 | Grounding is not relevance: junk evidence can still be fully cited and numerically clean ("error code E102" → passages about the power switch, all checks passed) | a relevance gate — does the cited evidence address the question? — before an answer is allowed to look verified |
 | Evidence is capped at the top ~5 chunks / 3 parameter rows / all profile cards | tune per route once `/ask` has real traffic |
-| A quote is verified against *the refs the sentence cites*; a sentence citing nothing falls back to the whole evidence set | acceptable: the citation check already forces a citation (or drops the claim) |
+| A quote is verified against *the refs the sentence cites*; a sentence citing nothing falls back to the whole evidence set | acceptable: a misquote is unquoted either way |
+| An uncited sentence with no number in it is flagged, not removed (§4a) | `ROBOG_ANSWER_STRICT=1` for the hard rule; a model-based entailment check would be the real fix |
+| The prompt, the 8192-token budget and the relaxed check were exercised with simulated model output only: this repository has no API key | run `python -m answer --check`, then `python -m answer.evaluate --provider gemini`, and read a sample of answers before the demo |
 | Numeric check is membership, not dimensional analysis (`20 kg` vs `20 cm` is caught, `20 kg` vs `20 kg/m²` is not) | unit-pair comparison covers the corpus' units; extend `UNITS` when new manuals arrive |
 | No answer-quality human eval yet; the 28-question benchmark grades keyword presence in answers the same repo wrote | a second, relevance-judged set from off-benchmark phrasings — [`brief-alignment.md`](brief-alignment.md) §4.2/§4.5 |
 | Gemini path not exercised against the live API in CI (no key) | tested through a fake client; run `--provider gemini` before the demo and keep the offline mode as the fallback |
