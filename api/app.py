@@ -29,6 +29,7 @@ Design notes:
 
 from __future__ import annotations
 
+import mimetypes
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
@@ -53,6 +54,20 @@ from .service import MAX_QUESTION_CHARS, RobogService, ServiceUnavailable
 #: assets. No bundler, no node_modules, no build step -- see ``ui/README.md``.
 UI_DIR = REPO_ROOT / "ui"
 UI_INDEX = UI_DIR / "index.html"
+
+# Static files get their Content-Type from ``mimetypes``, which on Windows reads
+# the registry -- where ``.js`` is often ``text/plain``. Browsers refuse to run a
+# ``<script type="module">`` served that way, leaving the chat page inert. Pin
+# the types the UI needs so the page behaves the same on every OS.
+for _ext, _type in (
+    (".js", "text/javascript"),
+    (".mjs", "text/javascript"),
+    (".css", "text/css"),
+    (".svg", "image/svg+xml"),
+    (".json", "application/json"),
+    (".png", "image/png"),
+):
+    mimetypes.add_type(_type, _ext)
 
 #: The corpus is EN/DE/IT (``retrieve.lang.LANGUAGES``).
 Language = Literal["en", "de", "it"]
