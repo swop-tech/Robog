@@ -263,5 +263,38 @@ class RealChromaIntegrationTests(unittest.TestCase):
             self.assertTrue(any("vector" in h.sources for h in result.hits))
 
 
+class GeminiFormatTests(unittest.TestCase):
+    """Official Gemini Embedding 2 (question-answering) templates, text-only."""
+
+    def test_document_text_with_title(self):
+        from ingest.embed_index import gemini_document_text
+        row = {"text": "Load capacity: 20 kg",
+               "metadata": {"title": "FlashBot User Manual V1.0"}}
+        self.assertEqual(
+            gemini_document_text(row),
+            "title: FlashBot User Manual V1.0 | text: Load capacity: 20 kg",
+        )
+
+    def test_document_text_without_title_uses_none(self):
+        from ingest.embed_index import gemini_document_text
+        self.assertEqual(
+            gemini_document_text({"text": "x", "metadata": {}}),
+            "title: none | text: x",
+        )
+        # Missing metadata entirely must not crash either.
+        self.assertEqual(gemini_document_text({"text": "x"}), "title: none | text: x")
+
+    def test_query_instruction_template(self):
+        from retrieve.vector import GEMINI_QUERY_INSTRUCTION, gemini_query_text
+        self.assertEqual(
+            gemini_query_text("How many kg can the FlashBot carry?"),
+            GEMINI_QUERY_INSTRUCTION + "How many kg can the FlashBot carry?",
+        )
+        self.assertEqual(
+            gemini_query_text("q"),
+            "task: question answering | query: q",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
