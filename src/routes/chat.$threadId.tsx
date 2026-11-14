@@ -97,10 +97,12 @@ function ChatScreen({ thread }: { thread: ChatThread }) {
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border md:block lg:w-72">{sidebar}</aside>
         <Sheet open={navOpen} onOpenChange={setNavOpen}>
-          <SheetContent side="left" className="w-80 max-w-[85vw] p-0">
-            <SheetTitle className="sr-only">Menu</SheetTitle>
-            <SheetDescription className="sr-only">FAQs, quick categories and answer mode</SheetDescription>
-            {sidebar}
+          <SheetContent side="left" className="flex w-80 max-w-[85vw] flex-col gap-0 bg-sidebar p-0">
+            <div className="flex h-14 shrink-0 items-center border-b border-sidebar-border px-4">
+              <SheetTitle className="font-display text-base font-semibold">Menu</SheetTitle>
+              <SheetDescription className="sr-only">FAQs, quick categories and answer mode</SheetDescription>
+            </div>
+            <div className="min-h-0 flex-1">{sidebar}</div>
           </SheetContent>
         </Sheet>
         <main className="flex min-w-0 flex-1 flex-col">

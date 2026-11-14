@@ -23,7 +23,7 @@ export function RobotSelector({ value, onChange, className }: RobotSelectorProps
       <SelectTrigger
         aria-label="Machine to enquire about"
         className={cn(
-          "h-10 w-full gap-2 rounded-lg bg-background shadow-none focus:ring-2 focus:ring-ring data-[placeholder]:text-muted-foreground",
+          "h-10 w-full gap-2 rounded-lg [&>span]:flex-1 [&>span]:text-left bg-background shadow-none focus:ring-2 focus:ring-ring data-[placeholder]:text-muted-foreground",
           value && "border-primary/60",
           className,
         )}
