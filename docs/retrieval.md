@@ -121,6 +121,8 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 | A large troubleshooting table can outrank the focused procedure on procedural questions | acceptable while the composer reads the top-k; a dense retriever helps here too |
 | `confidence` is recall-based, not calibrated | refine together with the answer composer + evidence validation (G5) |
 | Lexicon covers parameters, not procedures | grows from eval misses; keep it small and explainable |
+| No picture intent: `"Show me a picture of the BellaBot"` returns **0 hits** (BM25 matches words, not visual intent; the product name alone leaves nothing to score) | figure route + media endpoint — deferred, specced in [`pipeline-review.md` §9a](pipeline-review.md#9a-deferred-making-images-actually-usable-g6) |
+| Figure hits carry `image` but nothing serves or renders the PNG | `GET /media/{doc_id}/{filename}` in the API step |
 
 ## Next
 
