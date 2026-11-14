@@ -1,0 +1,16 @@
+# The standalone FastAPI backend (`api/`): Bonus 01's service + media serving.
+#
+#   pip install -r requirements-api.txt
+#   python -m ingest.run --data data
+#   python -m api                     # http://localhost:8000/docs
+#
+# Retrieval (`retrieve/`) and the offline answer formatter (`answer/`) need
+# nothing beyond Python 3.11+ -- these packages only turn them into a service.
+# For the Gemini answer path and the dense (Chroma) retriever also install
+# requirements-rag.txt.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# tests/test_api.py drives the app through FastAPI's TestClient
+httpx>=0.27

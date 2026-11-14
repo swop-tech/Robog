@@ -115,7 +115,8 @@ named in the prompt; if that also fails, the deterministic formatter answers and
 `answered by the offline formatter after failed validation`. The caller never receives an
 unvalidated answer.
 
-Each answer ships its own audit trail — this is the JSON contract for `POST /ask`:
+Each answer ships its own audit trail — this is the JSON contract for `POST /ask` (served by
+`api/app.py`; the endpoint adds `params` and a compact `verification`, see [`api.md`](api.md)):
 
 ```json
 {
@@ -182,6 +183,8 @@ Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 
 ## Next
 
-FastAPI (`/search`, `/ask`, `/products`, `/media/{doc_id}/{filename}`) on top of `SearchEngine` +
-`AnswerComposer` — `Answer.to_dict()` and `SearchResult.to_dict()` are already the response bodies —
-then the chat UI with clickable citations and inline figures.
+~~FastAPI (`/search`, `/ask`, `/products`, `/media/{doc_id}/{filename}`)~~ — done, see
+[`api.md`](api.md): `POST /ask` answers with `Answer.to_dict()` (the contract above, plus `params`
+and a compact `verification`), `GET /search` with `SearchResult.to_dict()`, and every citation and
+figure carries a fetchable `image_url`. Remaining: the chat UI with streaming answers, clickable
+citations and inline figures.

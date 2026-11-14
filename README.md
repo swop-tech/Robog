@@ -11,6 +11,7 @@ source-grounded answers for both technicians and non-technical users.
 - 🧹 Data processing (clean, chunk, metadata, parameter index): [`docs/data-processing.md`](docs/data-processing.md)
 - 🔎 Retrieval engine (routing, language policy, evaluation): [`docs/retrieval.md`](docs/retrieval.md)
 - 💬 Answer composer + evidence validation (G5, Bonus 02): [`docs/answering.md`](docs/answering.md)
+- 🔌 FastAPI backend (`/search`, `/ask`, `/products`, `/media`): [`docs/api.md`](docs/api.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
   (Bonus 01), multilingual ask/answer (Bonus 02), web chat as the required interface.
@@ -24,6 +25,7 @@ source-grounded answers for both technicians and non-technical users.
 | Embeddings | `gemini-embedding-2` (free tier) or `multilingual-e5-small` (offline) — pluggable |
 | Vector DB | Chroma (embedded) |
 | Answering | `gemini-2.5-flash` (free tier) **or** the deterministic offline formatter — pluggable |
+| API | FastAPI + Uvicorn (`api/`), stdlib-only client for the plug-and-play demo |
 | RAG framework | none needed: retrieval, prompting and evidence validation are ours (LlamaIndex optional) |
 | Environment | Python 3.11+, VS Code, Git — any laptop, CPU-only |
 
@@ -60,7 +62,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 202 tests
+python -m unittest discover -s tests -p "test_*.py"       # 259 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -120,15 +122,39 @@ On the 28-question benchmark, the offline formatter scores **100%** grounded, **
 cited, **100%** numbers verified, **0** invented numbers, **100%** answer-language match and
 **100%** cross-lingual disclosure. Details, checks and limits: [`docs/answering.md`](docs/answering.md).
 
-## Next: FastAPI (`/search`, `/ask`, `/products`) + media endpoint + chat UI
+## API (phase 4 — G4 → Bonus 01, + media serving)
 
-`SearchResult.to_dict()` and `Answer.to_dict()` are already the response bodies for `/search` and
-`/ask`. Remaining: the FastAPI app, `GET /media/{doc_id}/{filename}`, and the chat UI.
+```bash
+pip install -r requirements-api.txt
+python -m ingest.run --data data      # once: build/chunks.jsonl + params + profiles
+python -m api                         # http://0.0.0.0:8000, Swagger UI at /docs
 
-## Known gap: images are retrieved with language-correct paths, not yet served over HTTP
+curl 'localhost:8000/search?q=Wieviel+Zuladung+hat+der+FlashBot%3F&k=3'   # Bonus 01
+curl -X POST localhost:8000/ask -H 'content-type: application/json' \
+     -d '{"question": "Qual è la velocità massima del FlashBot?"}'
+curl 'localhost:8000/products?language=it&product=FlashBot&parameter=payload'
+curl -OJ localhost:8000/media/flashbot_user_manual_v1_0_multilanguage-de/de-p021R-fig01.png
 
-All 476 figures are indexed as their own chunks with a resolvable `image` path and parsed `labels`
-legend, and the `figure` route (`G6`) now selects language-appropriate overview/callout diagrams in
-EN, DE, and IT (falling back to EN when a manual lacks Italian). Still pending in the next step:
-the FastAPI media endpoint (`GET /media/...`) and UI rendering, specced in
-[`docs/pipeline-review.md` §9a](docs/pipeline-review.md#9a-deferred-making-images-actually-usable-g6).
+python -m api.client "Wieviel Zuladung hat der FlashBot?"   # 40-line second client
+python -m unittest tests.test_api -v                        # 57 tests
+```
+
+The retrieval engine and the answer composer as a service, re-implementing nothing:
+`GET /search` answers with `SearchResult.to_dict()` **unchanged** plus an absolute `image_url` per
+figure hit; `POST /ask` returns `{answer, language, route, citations, figures, params, verification,
+cross_lingual}` plus the full audit trail; `GET /products` serves the catalog, the localized profile
+cards and the parameter lookup; `GET /media/{doc_id}/{filename}` serves only `data/**/images/*.png`
+(path-traversal safe, cached). A missing index is a `503` with the command to run, never a crash —
+and `/media` keeps working without one. Details, the full JSON contracts and the configuration:
+[`docs/api.md`](docs/api.md).
+
+**Images are now viewable over HTTP.** All 476 figures are indexed as their own chunks with a
+resolvable `image` path and parsed `labels` legend, the `figure` route (`G6`) selects
+language-appropriate overview/callout diagrams in EN, DE, and IT (falling back to EN when a manual
+lacks Italian), and every figure hit now carries a fetchable `image_url` — the §9a gap is closed.
+Remaining: UI rendering in the chat interface.
+
+## Next: chat UI
+
+Streaming answers, clickable citations (they already carry `citation` + `page` + `image_url`) and
+inline figures — the last open item in [`docs/pipeline-review.md`](docs/pipeline-review.md) §9.
