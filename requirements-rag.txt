@@ -1,5 +1,7 @@
 # Phase 2 + 3 dependencies (embedding, vector DB, RAG).
-# Phase 1 (clean + chunk) needs NOTHING beyond Python 3.11+.
+# Phase 1 (clean + chunk) and the offline answer formatter need NOTHING beyond
+# Python 3.11+ -- the answering phase runs with no API key, no network and no
+# model download (it just falls back to the deterministic grounded formatter).
 
 # Vector database
 chromadb>=1.0
@@ -7,10 +9,15 @@ chromadb>=1.0
 # -- Embedding provider: pick one (or install both) ------------------------
 # local (default): free, offline, no API key
 sentence-transformers>=3.0
-# gemini: free Google AI Studio tier, needs the GEMINI_API_KEY env variable
+# gemini: free Google AI Studio tier, needs the GEMINI_API_KEY env variable.
+# Also used for answer generation (gemini-2.5-flash) -- no LlamaIndex needed:
+# the composer calls the API directly and validates every answer itself.
 google-genai>=1.0
 
-# -- Phase 3 (answering) will add: ---------------------------------------
+# -- Answering -------------------------------------------------------------
+# Plain `google-genai` above covers it. The RAG framework stays optional and is
+# not on the critical path: retrieval, prompting and evidence validation are
+# ours (see answer/). Install these only if you want LlamaIndex for experiments:
 # llama-index-core>=0.14
 # llama-index-llms-gemini
 # llama-index-vector-stores-chroma
