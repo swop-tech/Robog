@@ -9,7 +9,7 @@
  */
 import { NOT_FOUND_MESSAGE } from "@/config/app";
 import type { AskInput, AskResult } from "./roboguide-api";
-import { RoboGuideApiError } from "./roboguide-api";
+import { RoboGuideApiError } from "./api-errors";
 
 const wait = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {

@@ -8,7 +8,10 @@
 import { NOT_FOUND_MESSAGE } from "@/config/app";
 import type { AnswerMode, AnswerOutcome, SourceReference } from "@/types/chat";
 import { apiConfig, isMockMode, type ApiConfig } from "./api-config";
+import { RoboGuideApiError } from "./api-errors";
 import { mockAsk } from "./mock-roboguide";
+
+export { RoboGuideApiError };
 
 export interface AskInput {
   question: string;
@@ -27,16 +30,6 @@ export interface AskResult {
   outcome: AnswerOutcome;
   /** True when the answer came from the mock service, not a real backend. */
   isDemo: boolean;
-}
-
-export class RoboGuideApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number | null = null,
-  ) {
-    super(message);
-    this.name = "RoboGuideApiError";
-  }
 }
 
 /** Proposed request body — adjust field names here to match the backend. */
