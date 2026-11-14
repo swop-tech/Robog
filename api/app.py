@@ -83,6 +83,11 @@ class AskRequest(BaseModel):
     """Body of ``POST /ask``."""
 
     question: str = Field(..., min_length=1, max_length=MAX_QUESTION_CHARS)
+    history: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="up to 8 recent user questions, used only to resolve follow-ups",
+    )
     k: Optional[int] = Field(None, ge=1, le=50, description="chunks to retrieve")
     language: Optional[Language] = Field(None, description=_LANG_HELP)
     product: Optional[str] = Field(None, description="restrict retrieval to one product")
@@ -253,6 +258,7 @@ def create_app(
         return await run_in_threadpool(
             lambda: svc.ask(
                 body.question,
+                history=body.history,
                 k=body.k,
                 language=body.language,
                 product=body.product,

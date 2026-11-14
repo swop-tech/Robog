@@ -103,8 +103,10 @@ cannot drift.
    (streaming, server-side history, feedback, regenerate). The exact request each
    one needs is written up in [`../docs/ui-backend-gaps.md`](../docs/ui-backend-gaps.md).
 4. **Local state says it is local.** Conversations, settings and feedback live in
-   `localStorage` under `telmekon.ui.v1` (`POST /ask` is stateless). The sidebar
-   footnote, the empty state, the feedback toast and Settings all say so. A
+   `localStorage` under `telmekon.ui.v1`. `/ask` accepts up to 8 recent user
+   questions as temporary follow-up context but does not persist conversation
+   history. The sidebar footnote, the empty state, the feedback toast and Settings
+   all say so. A
    restored conversation re-renders what the API returned before; its raw
    `/search` pane stays empty until **Re-run live** is pressed.
 5. **No secrets in the browser.** The Gemini key is read server-side from `.env`

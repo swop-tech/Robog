@@ -220,6 +220,7 @@ class RobogService:
         self,
         question: str,
         *,
+        history: list[str] | None = None,
         k: int | None = None,
         language: str | None = None,
         product: str | None = None,
@@ -235,6 +236,7 @@ class RobogService:
         composer = self.composer_for(provider, model)
         answer = composer.answer(
             question,
+            history=history,
             k=min(k, self.settings.max_k) if k else None,
             language=language,
             product=product,

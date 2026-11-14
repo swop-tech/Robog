@@ -552,6 +552,12 @@ class PromptTests(unittest.TestCase):
         self.assertIn("asked for a picture", build_prompt("q", evidence, route="figure"))
         self.assertIn("specification lookup", build_prompt("q", evidence, route="lookup"))
 
+    def test_prompt_uses_prior_questions_only_as_follow_up_context(self):
+        prompt = build_prompt("And its battery?", make_evidence(), history=["Tell me about FlashBot"])
+        self.assertIn("Recent user questions (context only, not evidence)", prompt)
+        self.assertIn("Tell me about FlashBot", prompt)
+        self.assertIn("never treat it as evidence", prompt)
+
     def test_evidence_block_is_capped(self):
         evidence = make_evidence()
         evidence.refs[1].text = "x" * 5000

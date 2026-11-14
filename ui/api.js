@@ -8,8 +8,10 @@
  *   GET  /products                     catalog / profile cards / parameter rows
  *   GET  /media/{doc_id}/{filename}    the manuals' figures
  *
- * Nothing else exists, so nothing else is called: there is no streaming, no
- * conversation-history, no feedback and no regenerate endpoint. `CAPABILITIES`
+ * Nothing else exists, so nothing else is called: there is no streaming,
+ * server-managed conversation history, feedback or regenerate endpoint. `/ask`
+ * accepts a small client-supplied window of prior user questions for follow-ups;
+ * it does not store turns. `CAPABILITIES`
  * below is the honest list the UI renders from — a control that would need a
  * missing endpoint is labelled "not supported by the API" instead of faking a
  * result. The exact request each one needs is written up in
@@ -34,7 +36,7 @@ export const ENDPOINTS = {
  */
 export const CAPABILITIES = {
   streaming: false,             // POST /ask returns one JSON body; no SSE/WebSocket route exists
-  conversationHistory: false,   // POST /ask is stateless; conversations live in localStorage only
+  conversationHistory: false,   // no server persistence; /ask accepts only request-scoped follow-up context
   conversationSearch: false,    // same — search runs over the local store
   feedback: false,              // no POST /feedback; thumbs are stored locally and labelled as such
   regenerateEndpoint: false,    // "Regenerate" re-issues the same POST /ask (a real request)
@@ -156,6 +158,7 @@ async function request(path, { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT
  */
 export async function ask(question, opts = {}) {
   const body = { question };
+  if (Array.isArray(opts.history) && opts.history.length) body.history = opts.history.slice(-8);
   if (opts.k) body.k = opts.k;
   if (opts.language) body.language = opts.language;
   if (opts.product) body.product = opts.product;

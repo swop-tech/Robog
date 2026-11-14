@@ -157,6 +157,14 @@ describe("POST /ask", () => {
     assert.deepEqual(JSON.parse(calls[0].init.body), { question: "Wieviel Zuladung hat der FlashBot?", k: 8 });
   });
 
+  test("recent user questions are sent as bounded follow-up context", async () => {
+    mockFetch(() => json(answerPayload));
+    await ask("And its battery?", { history: ["turn 1", "turn 2", "turn 3", "turn 4", "turn 5", "turn 6", "turn 7", "turn 8", "turn 9"] });
+    assert.deepEqual(JSON.parse(calls[0].init.body).history, [
+      "turn 2", "turn 3", "turn 4", "turn 5", "turn 6", "turn 7", "turn 8", "turn 9",
+    ]);
+  });
+
   test("a switched-off policy flag is sent explicitly", async () => {
     mockFetch(() => json(answerPayload));
     await ask("q", { k: 5, follow_user_language: false, cross_lingual_fallback: false, provider: "gemini", product: "BellaBot" });

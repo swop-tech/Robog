@@ -557,7 +557,18 @@ async function submitQuestion(rawQuestion, { regenerateOf = null } = {}) {
   }
 
   const opts = askOptions(settings());
-  const request = { question, ...opts };
+  const active = conversation();
+  const messages = active?.messages || [];
+  const targetIndex = regenerateOf
+    ? messages.findIndex((message) => message.id === regenerateOf)
+    : messages.length;
+  const history = messages
+    .slice(0, targetIndex < 0 ? messages.length : targetIndex)
+    .filter((message) => message.role === "user")
+    .map((message) => message.question || message.text || "")
+    .filter(Boolean)
+    .slice(-6);
+  const request = { question, ...opts, ...(history.length ? { history } : {}) };
   ui.busy = true;
   ui.startedAt = performance.now();
   els.send.disabled = true;

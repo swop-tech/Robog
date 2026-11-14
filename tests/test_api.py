@@ -360,6 +360,25 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(payload["citations"], [])
         self.assertNotIn("0/0", verification["summary"])
 
+    def test_ask_resolves_follow_up_product_from_recent_user_question(self) -> None:
+        response = self.client.post(
+            "/ask",
+            json={
+                "question": "And its battery capacity?",
+                "history": ["Tell me about FlashBot"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("15 Ah", payload["answer"])
+        self.assertTrue(payload["citations"])
+
+    def test_ask_rejects_too_many_history_turns(self) -> None:
+        response = self.client.post(
+            "/ask", json={"question": "What about it?", "history": ["x"] * 9}
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_ask_answers_in_the_question_language_and_discloses_cross_lingual(self) -> None:
         # The fixture's German manual has no "Max speed" row: the answer is
         # German, the evidence is English, and the response says so.

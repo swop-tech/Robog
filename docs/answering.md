@@ -88,7 +88,23 @@ or per-tray arithmetic — so the number check can verify every value.
 Limit: the offline formatter still cannot *judge* between robots. Once a scenario is given it lists the
 matching cards; it does not say which is better.
 
-## 2. Multilingual answering (Bonus 02)
+## 2. More natural, multi-turn chat without changing the knowledge base
+
+The web chat now sends up to six previous **user questions** with each request.
+The composer uses a prior, unambiguous robot mention to scope a follow-up such as
+“and its battery?” to that robot, and passes the recent questions to the model
+only as context for resolving references. The prompt treats history as untrusted:
+it is never evidence and cannot override the manual excerpts retrieved for the
+current turn. `/ask` accepts at most eight history entries, and no conversation
+history is stored server-side. The documents and indexes remain the only source
+of factual claims.
+
+The generation instructions also ask the configured model for plain, helpful
+support-style prose instead of a terse report. That improves the Gemini path;
+when no Gemini key is configured, the offline formatter remains deterministic
+and deliberately more template-like while preserving exact citations and specs.
+
+## 3. Multilingual answering (Bonus 02)
 
 The answer language is the **question's** language, detected deterministically by
 `retrieve.lang` and reused from the retrieval result. The prompt says *answer in X, the evidence
@@ -112,7 +128,7 @@ Three properties make that defensible rather than decorative:
    `cross_lingual` and `source_languages` are in the JSON, and the benchmark checks that the
    disclosure actually happens (`cross-lingual evidence disclosed`, 100%).
 
-## 3. Evidence validation (G5)
+## 4. Evidence validation (G5)
 
 Three deterministic checks run on **every** answer, whoever wrote it. They are regex + set
 membership: no model, no network, milliseconds — so they can be *shown*, not just claimed.
@@ -160,7 +176,7 @@ Each answer ships its own audit trail — this is the JSON contract for `POST /a
 }
 ```
 
-## 4. Measured, not assumed
+## 5. Measured, not assumed
 
 `python -m answer.evaluate` answers the same 28 questions of `eval/questions.jsonl` and scores the
 answers — the offline formatter by default (no key), or Gemini with `--provider gemini`:
@@ -181,7 +197,7 @@ answers — the offline formatter by default (no key), or Gemini with `--provide
 Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 (the report lists every question, its route, its check counters and any answer that failed).
 
-## 5. Layout
+## 6. Layout
 
 | File | Role |
 |---|---|
@@ -195,7 +211,7 @@ Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 | `answer/strings.py` | the localized sentences Robog writes itself (EN/DE/IT) |
 | `tests/test_answer.py` | 78 tests: checks, formatter, generators, composer, evaluator, real corpus |
 
-## 6. Known limits (and where they go)
+## 7. Known limits (and where they go)
 
 | Limit | Next step |
 |---|---|

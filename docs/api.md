@@ -91,8 +91,10 @@ drawer with a *Re-run live* button that proves Bonus 01 on stage. It calls
 pill and `GET /products` for the product scope, and normalises every `image_url`
 to a same-origin path, so figures load behind any reverse proxy. Light and dark
 themes, saved conversations and the request settings live in the browser
-(`POST /ask` is stateless); what the API cannot do yet is labelled in Settings
-and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
+(the API does not persist conversations). For natural follow-ups, the UI sends up
+to six recent user questions with each `/ask` request; those turns are used only
+to resolve references and never as evidence. What the API cannot do yet is
+labelled in Settings and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
 `api.js` (network) / `store.js` (state) / `render.js` + `markdown.js` (payload →
 HTML) / `app.js` (DOM), with 202 `node --test` cases plus an opt-in suite that
 drives a running server. Full details: [`../ui/README.md`](../ui/README.md).
@@ -188,8 +190,10 @@ The response leads with the contract from `docs/answering.md` §3 — `answer`,
 }
 ```
 
-Body fields: `question` (required, ≤2000 chars), `k`, `language`, `product`,
-`provider` (`gemini` | `offline` | `auto`, per request — generators are cached),
+Body fields: `question` (required, ≤2000 chars), optional `history` (up to 8
+recent user questions, each used only to resolve a follow-up reference; not stored
+or treated as evidence), `k`, `language`, `product`, `provider` (`gemini` |
+`offline` | `auto`, per request — generators are cached),
 `model`, `follow_user_language`, `cross_lingual_fallback`, `include_search`,
 `include_evidence`.
 

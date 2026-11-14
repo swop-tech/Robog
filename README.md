@@ -194,9 +194,10 @@ Built around the judging rubric:
   the chat is only the first client of the retrieval service.
 - **Product cards** for the advisory persona (payload, dimensions, runtime, charging time, passage
   width, environments, citation) rendered from `profiles[]` — only the fields a profile really carries.
-- **Saved conversations, settings and a live status pill**: history and preferences live in the browser
-  (`POST /ask` is stateless), evidence depth / answer language / product scope / provider / language
-  policy map onto real `AskRequest` fields, and `GET /health` drives the pill, its tooltip and a banner
+- **Saved conversations, settings and a live status pill**: saved history and preferences live in the browser
+  (`POST /ask` accepts up to 8 recent user questions as follow-up context but does not persist turns),
+  evidence depth / answer language / product scope / provider / language policy map onto real `AskRequest` fields,
+  and `GET /health` drives the pill, its tooltip and a banner
   carrying the server's own fix command when the index is missing.
 - **Nothing simulated**: features the backend does not have (streaming, server-side history, feedback,
   a regenerate endpoint) are listed in Settings as unsupported and specified in
