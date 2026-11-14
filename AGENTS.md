@@ -28,3 +28,11 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+## Project rules
+
+- All backend calls go through `src/services/roboguide-api.ts`; components never call `fetch` directly — keeps the separately-built backend swappable.
+- Request/response shapes are adapted only in `buildRequestBody` / `mapResponse`; the backend contract is not final.
+- Mock answers stay in `src/services/mock-roboguide.ts`, always `isDemo: true`, and must never contain real-looking specs, page numbers or citations.
+- Conversations persist in localStorage through `src/lib/chat-store.ts` hooks/actions; each thread has its own `/chat/$threadId` URL.
+- Sample machines, FAQs, categories and languages live in `src/config/app.ts` as replaceable placeholder data.
