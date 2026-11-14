@@ -85,7 +85,10 @@ def _local_embedder():
             "sentence-transformers is not installed -- "
             "pip install -r requirements-rag.txt  (or set ROBOG_EMBED_PROVIDER=gemini)"
         ) from exc
-    model = SentenceTransformer(LOCAL_MODEL)
+    try:
+        model = SentenceTransformer(LOCAL_MODEL)
+    except Exception as exc:
+        raise VectorStoreUnavailable(f"could not load local embedding model {LOCAL_MODEL}: {exc}") from exc
 
     def embed(texts: list[str]) -> list[list[float]]:
         vectors = model.encode(
@@ -235,7 +238,7 @@ class ChromaRetriever:
         policy holds for the dense half exactly as it does for BM25.
         """
         query = (query or "").strip()
-        if not query or k <= 0:
+        if not query or k <= 0 or allowed_ids == set():
             return []
         try:
             vector = self._embed_query(query)
@@ -249,35 +252,34 @@ class ChromaRetriever:
             raise VectorStoreUnavailable(f"Chroma count() failed: {exc}") from exc
         if total == 0:
             return []
-        # Over-fetch when a post-filter may drop rows before we reach k.
-        n_fetch = max(k * 4 if allowed_ids is not None else k * 2, 20)
-        try:
-            result = self.collection.query(
-                query_embeddings=[vector],
-                n_results=min(n_fetch, total),
-                include=["documents", "metadatas", "distances"],
-            )
-        except Exception as exc:
-            raise VectorStoreUnavailable(f"Chroma query failed: {exc}") from exc
-
-        ids = (result or {}).get("ids") or [[]]
-        docs = (result or {}).get("documents") or [[]]
-        metas = (result or {}).get("metadatas") or [[]]
-        dists = (result or {}).get("distances") or [[]]
-        hits: list[DenseHit] = []
-        for chunk_id, doc, meta, distance in zip(ids[0], docs[0], metas[0], dists[0]):
-            if allowed_ids is not None and chunk_id not in allowed_ids:
-                continue
+        # Expand the global candidate set until enough allowed results are found
+        # or the collection is exhausted. A fixed over-fetch can miss all rows
+        # of a small product/language subset.
+        n_fetch = min(total, max(k * 4 if allowed_ids is not None else k * 2, 20))
+        while True:
             try:
-                score = 1.0 - float(distance)   # cosine space: distance = 1 - cosine similarity
-            except (TypeError, ValueError):
-                score = 0.0
-            hits.append(DenseHit(
-                chunk_id=str(chunk_id),
-                score=score,
-                text=doc or "",
-                metadata=dict(meta or {}),
-            ))
-            if len(hits) >= k:
-                break
-        return hits
+                result = self.collection.query(
+                    query_embeddings=[vector], n_results=n_fetch,
+                    include=["documents", "metadatas", "distances"],
+                )
+            except Exception as exc:
+                raise VectorStoreUnavailable(f"Chroma query failed: {exc}") from exc
+
+            ids = (result or {}).get("ids") or [[]]
+            docs = (result or {}).get("documents") or [[]]
+            metas = (result or {}).get("metadatas") or [[]]
+            dists = (result or {}).get("distances") or [[]]
+            hits: list[DenseHit] = []
+            for chunk_id, doc, meta, distance in zip(ids[0], docs[0], metas[0], dists[0]):
+                if allowed_ids is not None and chunk_id not in allowed_ids:
+                    continue
+                try:
+                    score = 1.0 - float(distance)
+                except (TypeError, ValueError):
+                    score = 0.0
+                hits.append(DenseHit(str(chunk_id), score, doc or "", dict(meta or {})))
+                if len(hits) >= k:
+                    break
+            if len(hits) >= k or n_fetch >= total or allowed_ids is None:
+                return hits
+            n_fetch = min(total, n_fetch * 2)

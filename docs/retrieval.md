@@ -2,16 +2,16 @@
 
 > Phase 2/3 core of [`pipeline-review.md`](pipeline-review.md) §6, built to the stack rules of
 > [`stack-decisions.md`](stack-decisions.md): plain Python first, framework only where it pays.
-> Runs **offline, with no dependencies and no embedding model** — the dense layer plugs into the
-> same interface later.
+> The keyword baseline runs offline without dependencies. An optional Chroma dense retriever
+> is implemented, but requires an index and matching embedding provider.
 
-## Why no embeddings yet
+## Keyword baseline and optional embeddings
 
 A demo must not die on Wi-Fi, rate limits or a 470 MB model download. Everything below runs on
 the chunk corpus we already produce (`ingest/`), so the retrieval behaviour — routing, language
 policy, exact parameter values, citations — is settled *and measured* before a single vector
-exists. When the dense retriever arrives it is one more ranked list inside the same fusion, and
-the evaluation harness already has a baseline to beat.
+exists. The optional dense retriever contributes another ranked list to the same fusion. The evaluation
+harness currently measures the keyword-only baseline, not dense retrieval.
 
 ## What it does
 
@@ -61,22 +61,25 @@ manuals) **and** acts as a cross-lingual bridge: a German question expands to En
 which is how a German question finds an English-only manual.
 Missing words fall back to a prefix match ("consuma" → "consumption").
 
-## Measured, not claimed
+## Small keyword-only benchmark
 
 `python -m retrieve.evaluate` (20 questions: both personas, EN/DE/IT, figures, procedures, three
 Italian questions on manuals that have no Italian):
 
-| Configuration | Recall@8 | MRR | Hits in question language | Cross-language duplicates | Param index hit |
+| Configuration | Pass@8 | MRR | Hits in question language | Cross-language duplicates | Param index hit |
 |---|---|---|---|---|---|
 | `no_policy` — every language at once (naive RAG) | 100% | 0.88 | 68% | 12% | 100% |
 | `hard_filter` — user's language only | 85% | 0.78 | 85% | 0% | 80% |
 | **`policy` — same language first, fallback** | **100%** | **0.90** | **85%** | **0%** | **100%** |
 
-* A hard language filter loses **15 points of recall**: the three Italian questions about
+* These are automated keyword/product checks, not proof of answer correctness. Advisory cases
+  check product diversity only. Parameter and cross-language expectations are checked when annotated.
+* A hard language filter loses **15 points of pass rate**: the three Italian questions about
   Italian-less manuals return nothing. That is the Bonus 02 case, not an edge case.
 * No policy costs **17 points of same-language context** and fills 12% of the slots with the same
   passage in another language — the dilution argument, quantified.
-* The parameter index answers **10/10** specification questions with the exact value and page.
+* The parameter index matches the annotated keywords for 10/10 specification cases. This does
+  not independently verify that every returned parameter value or citation is correct.
 
 Re-run and regenerate the report: `python -m retrieve.evaluate --out build/eval-report.md`.
 
@@ -122,5 +125,5 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 ## Next
 
 FastAPI (`/search`, `/ask`, `/products`) on top of `SearchEngine` → chat UI → answer composer with
-citation/numeric verification (G5). Dense retrieval slots in behind `SearchEngine` without
-changing any caller.
+citation/numeric verification (G5). Dense retrieval is optional behind `SearchEngine`; it still needs end-to-end validation with
+a real embedding model and a larger, relevance-judged benchmark.

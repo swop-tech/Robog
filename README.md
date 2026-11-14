@@ -48,25 +48,27 @@ Figures and tables get their own chunks so answers can return exact parameter va
 and the relevant image; tables additionally become rows in the parameter index
 (`product → parameter → value/unit → source page`) for exact technician lookups.
 
-## Retrieval engine (phase 2 — done, measured)
+## Retrieval engine (keyword baseline and optional dense layer)
 
 ```bash
+python -m ingest.run --data data                          # build the local indexes first
 python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonus 01)
 python -m retrieve.evaluate                               # 20-question benchmark
 python -m unittest tests.test_retrieve -v                 # 37 tests
 ```
 
-Hybrid retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
+Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
 structured parameter index for exact values, a domain lexicon (payload ≈ Zuladung ≈ carico) and a
 per-question language policy (user's language first, cross-lingual fallback for the manuals
-without one). Measured on 20 questions (EN/DE/IT, both personas):
+without one). On a small 20-question keyword-matching benchmark (EN/DE/IT, both personas):
 
-| Configuration | Recall@8 | Hits in question language | Cross-language duplicates |
+| Configuration | Pass@8 | Hits in question language | Cross-language duplicates |
 |---|---|---|---|
 | every language at once (naive RAG) | 100% | 68% | 12% |
 | user's language only (hard filter) | 85% | 85% | 0% |
 | **same language first, fallback** | **100%** | **85%** | **0%** |
 
+These checks do not establish answer correctness; advisory cases only check product diversity.
 Details: [`docs/retrieval.md`](docs/retrieval.md).
 
 ## Embedding + indexing (phase 3 — dense layer)
@@ -77,4 +79,6 @@ python -m ingest.embed_index --provider local    # offline, no key
 python -m ingest.embed_index --provider gemini   # needs GEMINI_API_KEY (free)
 ```
 
-*Work in progress: data processing is complete; embeddings + hybrid retrieval are next.*
+The dense path is optional and requires a compatible built index and embedding provider.
+The local model must be downloaded before it can run offline. End-to-end embedding quality
+has not been validated by the keyword-only benchmark above. The API and answer composer remain work in progress.
