@@ -7,14 +7,17 @@ output) and the place where three review gaps meet:
 * G2 question types -- the router (lookup / advisory / default);
 * G3 + Bonus 02 multilingual -- the language policy from ``retrieve.lang``.
 
-Ranking is deliberately simple and inspectable: a strict BM25 pass over the
+Keyword ranking is deliberately simple and inspectable: a strict BM25 pass over the
 question's own words, a wider pass over the domain lexicon
 (``retrieve.lexicon``, which is also what bridges DE/IT questions to English
 manuals), and the parameter index folded in with reciprocal rank fusion.
 
-No embedding model is required: this runs offline, on any laptop. The dense
-retriever is a later addition behind the same interface (see
-``docs/retrieval.md``).
+No embedding model is required: this runs offline, on any laptop. A dense
+retriever (Chroma + the same embeddings Sujal's pipeline indexes with, see
+``retrieve/vector.py``) can be attached -- ``--vector`` on the CLI,
+``SearchEngine.from_build(..., vector="auto")``, or an injected retriever --
+and its ranked list is fused into the same reciprocal-rank-fusion, honoring
+the same language policy. Without it, behavior is unchanged.
 
 Usage:
     from retrieve.engine import SearchEngine
@@ -38,6 +41,7 @@ from .lexicon import concepts_for, expand_tokens
 from .params import ParamHit, ParamIndex
 from .router import Route, route as classify
 from .text import fold, tokenize
+from .vector import ChromaRetriever, DenseHit, VectorStoreUnavailable
 
 # Words every product name contains -- they say nothing about *which* product.
 GENERIC_PRODUCT_WORDS = {
@@ -180,10 +184,22 @@ class SearchResult:
 class SearchEngine:
     """Hybrid retriever over the chunk corpus (+ parameter index)."""
 
-    def __init__(self, chunks: list[dict], params: ParamIndex | None = None):
+    def __init__(
+        self,
+        chunks: list[dict],
+        params: ParamIndex | None = None,
+        *,
+        retriever: ChromaRetriever | None = None,
+    ):
         self.chunks = chunks
         self.by_id = {chunk["id"]: chunk for chunk in chunks}
         self.params = params or ParamIndex([])
+        # Optional dense (vector) retriever. When None, the engine behaves
+        # exactly as before (offline keyword retrieval). Attach one to fuse
+        # Chroma's ranked list into the same RRF fusion.
+        self.retriever = retriever
+        self.retriever_note: str | None = None
+        self.params_note: str | None = None
 
         # Section title is repeated into the indexed text (a small but real
         # boost: the heading names the topic better than the body prose).
@@ -213,7 +229,19 @@ class SearchEngine:
         cls,
         chunks_path: str | Path = "build/chunks.jsonl",
         params_path: str | Path = "build/params.jsonl",
+        *,
+        vector: str | ChromaRetriever | None = None,
     ) -> "SearchEngine":
+        """Build the engine from the pipeline's build directory.
+
+        ``vector``:
+
+        * ``None`` (default) -- keyword retrieval only, fully offline;
+        * ``"auto"`` -- connect to the existing Chroma store (see
+          ``retrieve/vector.py``); if it is not built yet, the engine silently
+          keeps working in keyword mode and says so in ``retriever_note``;
+        * a ``ChromaRetriever`` (or compatible object) -- use it directly.
+        """
         chunks_file = Path(chunks_path)
         if not chunks_file.exists():
             raise SystemExit(
@@ -221,7 +249,23 @@ class SearchEngine:
             )
         with chunks_file.open(encoding="utf-8") as fh:
             chunks = [json.loads(line) for line in fh if line.strip()]
-        return cls(chunks, ParamIndex.from_jsonl(params_path))
+        engine = cls(chunks, ParamIndex.from_jsonl(params_path))
+        if not Path(params_path).exists():
+            engine.params_note = (f"parameter index not found: {params_path}; "
+                                  "exact parameter lookup disabled -- run python -m ingest.run")
+        if vector is None:
+            return engine
+        if isinstance(vector, str):
+            if vector != "auto":
+                raise ValueError(f"vector must be None, 'auto' or a retriever, got {vector!r}")
+            try:
+                engine.retriever = ChromaRetriever.connect()
+            except VectorStoreUnavailable as exc:
+                engine.retriever = None
+                engine.retriever_note = f"dense retrieval disabled: {exc}"
+            return engine
+        engine.retriever = vector
+        return engine
 
     @staticmethod
     def _aliases_for(product: str) -> set[str]:
@@ -292,6 +336,45 @@ class SearchEngine:
             allowed.add(chunk_id)
         return allowed
 
+    def _chunk_view(self, chunk_id: str, dense_by_id: dict[str, DenseHit]) -> tuple[str, dict]:
+        """(text, metadata) for a chunk id.
+
+        Prefers the chunk corpus (``build/chunks.jsonl``) so citations have one
+        source of truth; falls back to what the vector store holds (the same
+        rows, indexed by id) when the two are out of sync.
+        """
+        chunk = self.by_id.get(chunk_id)
+        if chunk is not None:
+            return chunk.get("text", ""), chunk.get("metadata", {})
+        dense = dense_by_id.get(chunk_id)
+        if dense is not None:
+            return dense.text, dense.metadata
+        return "", {"id": chunk_id}
+
+    def _dense_hits(
+        self,
+        query: str,
+        allowed: set[str] | None,
+        k: int,
+    ) -> list[DenseHit]:
+        """Ask the vector store for candidates; degrade gracefully on failure.
+
+        A demo laptop without the store, the embedding model or the network must
+        still answer -- the keyword path carries on and the note says why.
+        """
+        if self.retriever is None:
+            return []
+        try:
+            return self.retriever.search(query, k=k, allowed_ids=allowed)
+        except VectorStoreUnavailable as exc:
+            self.retriever = None
+            self.retriever_note = f"dense retrieval disabled: {exc}"
+            return []
+        except Exception as exc:  # any retriever failure must not kill search
+            self.retriever = None
+            self.retriever_note = f"dense retrieval disabled: unexpected {type(exc).__name__}: {exc}"
+            return []
+
     def _rank_tier(
         self,
         tokens: list[str],
@@ -299,8 +382,9 @@ class SearchEngine:
         *,
         allowed: set[str] | None,
         k: int,
+        dense: list[DenseHit] | None = None,
     ) -> list[Hit]:
-        """BM25 strict pass + lexicon pass, fused with RRF."""
+        """BM25 strict pass + lexicon pass + dense pass, fused with RRF."""
         candidate_k = max(k * 3, 12)
         strict = self.bm25.search("", k=candidate_k, allowed=allowed, query_tokens=tokens)
         loose = (
@@ -308,6 +392,8 @@ class SearchEngine:
             if expansion and expansion != tokens
             else []
         )
+        dense = dense or []
+        dense_by_id = {hit.chunk_id: hit for hit in dense}
 
         scores: dict[str, float] = defaultdict(float)
         sources: dict[str, list[str]] = defaultdict(list)
@@ -318,29 +404,42 @@ class SearchEngine:
             scores[hit.chunk_id] += EXPANSION_WEIGHT * 1.0 / (RRF_K + rank)
             if "bm25" not in sources[hit.chunk_id]:
                 sources[hit.chunk_id].append("lexicon")
+        for rank, hit in enumerate(dense, start=1):
+            # Dense is a co-equal retriever: same RRF weight as the BM25 pass.
+            scores[hit.chunk_id] += 1.0 / (RRF_K + rank)
+            sources[hit.chunk_id].append("vector")
+
+        # Drop ids that exist in no source of truth (stale index vs corpus).
+        for chunk_id in list(scores):
+            if chunk_id not in self.by_id and chunk_id not in dense_by_id:
+                del scores[chunk_id]
 
         # Chunks whose own heading contains query terms are strong candidates.
         if len(tokens) > 1:
             query_set = set(tokens)
             for chunk_id in scores:
-                title = self.by_id[chunk_id].get("metadata", {}).get("section_title") or ""
+                _, meta = self._chunk_view(chunk_id, dense_by_id)
+                title = meta.get("section_title") or ""
                 title_tokens = set(tokenize(title))
                 if title_tokens:
                     overlap = len(query_set & title_tokens) / len(query_set)
                     scores[chunk_id] *= 1 + 1.0 * overlap
 
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:candidate_k]
-        return [
-            Hit(
-                chunk_id=chunk_id,
-                text=self.by_id[chunk_id].get("text", ""),
-                metadata=self.by_id[chunk_id].get("metadata", {}),
-                score=score,
-                rank=rank,
-                sources=sources[chunk_id],
+        hits: list[Hit] = []
+        for rank, (chunk_id, score) in enumerate(ranked, start=1):
+            text, meta = self._chunk_view(chunk_id, dense_by_id)
+            hits.append(
+                Hit(
+                    chunk_id=chunk_id,
+                    text=text,
+                    metadata=meta,
+                    score=score,
+                    rank=rank,
+                    sources=sources[chunk_id],
+                )
             )
-            for rank, (chunk_id, score) in enumerate(ranked, start=1)
-        ]
+        return hits
 
     @staticmethod
     def _dedupe_translations(hits: list[Hit], preference: list[str]) -> list[Hit]:
@@ -411,6 +510,8 @@ class SearchEngine:
             return SearchResult(query, detected, routed.kind, routed.reason, "empty query")
 
         notes: list[str] = []
+        if self.params_note:
+            notes.append(self.params_note)
         if detected and products and detected not in available:
             notes.append(
                 f"no {detected.upper()} manual for {', '.join(products)} "
@@ -442,8 +543,9 @@ class SearchEngine:
             if allowed is not None and not allowed:
                 tiers_used.append(f"{tier or 'any'}:0")
                 continue
+            dense_hits = self._dense_hits(query, allowed, k=max(k * 3, 12))
             tier_hits = self._rank_tier(
-                scoring_tokens, expansion, allowed=allowed, k=max(k * 2, 12)
+                scoring_tokens, expansion, allowed=allowed, k=max(k * 2, 12), dense=dense_hits
             )
             tiers_used.append(f"{tier or 'any'}:{len(tier_hits)}")
             if not tier_hits:
@@ -457,6 +559,12 @@ class SearchEngine:
             if top > best_top * 1.25:      # clearly better across languages
                 hits, best_top = tier_hits, top
             break
+
+        if self.retriever_note:
+            notes.append(self.retriever_note)
+        elif self.retriever is not None:
+            provider = getattr(self.retriever, "provider", "vector")
+            notes.append(f"dense retrieval on ({provider})")
 
         params: list[ParamHit] = []
         # "Qual è la velocità massima del FlashBot?" has no English lookup cue,

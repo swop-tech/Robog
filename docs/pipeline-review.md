@@ -169,14 +169,77 @@ Final answer — answer + citations + relevant image
 | Bonus 01 | Implicit in the retrieval-engine box | Explicit standalone API + second client |
 | Bonus 02 | Not addressed | Multilingual embeddings + language policy + the no-IT-manuals demo |
 
-## 8. Next steps
+## 8. Status — where the pipeline actually stands
 
-1. ~~**Get the actual dataset into the workspace**~~ ✅ done — `data/` now holds the 22 manuals
-   (63 markdown files). Ingestion is built and validated against the real files:
+Checked against the repo at this commit (`ingest/`, `retrieve/`, `eval/`, `docs/`).
+
+| Pipeline box / fix | State | Evidence |
+|---|---|---|
+| Dataset in the workspace | ✅ done | `data/` — 22 manuals, 63 markdown files (EN/DE/IT) |
+| Data processing (clean, chunk, metadata) | ✅ done | `python -m ingest.run --data data` → 1,351 chunks (706 text · 169 table · 476 figure), 0 errors · 1 warning |
+| Figures as chunks + parameter index | ✅ done | 476 figure chunks with `image`; `build/params.jsonl` 2,039 rows |
+| BM25 + parameter index + routing (G1 partial) | ✅ done | `retrieve/` — 20-question benchmark: Pass@8 100%, MRR 0.90 |
+| Language policy (G3, Bonus 02 demo) | ✅ done for retrieval | policy beats naive (68%) and hard filter (85%) — 85% same-language hits, 0% duplicates |
+| Eval set (§7 script) | ✅ done | `eval/questions.jsonl` — 20 Q, both personas, EN/DE/IT, 3 no-Italian-source |
+| Dense retrieval (G3/G1 full) | ⚠️ code only | `ingest/embed_index.py` exists; never run/validated end-to-end |
+| Product profile cards (G2 advisory) | ❌ missing | router diversifies chunks, but no cross-document profiles yet |
+| Backend API (G4 → Bonus 01) | ❌ missing | no FastAPI; `SearchResult.to_dict()` is only the contract |
+| Answer composer + evidence validation (G5) | ❌ missing | citation/numeric/quote checks designed (§4 G5), not implemented |
+| Chat UI incl. figure display | ❌ missing | image path exists in the hits, nothing renders it |
+| Image *display* path (G6, deferred) | 🅿️ designed, not built | figures are indexed and retrievable, but no media endpoint and no picture intent — see §9a |
+
+**Net:** phases 1–2 (data + retrieval) are finished and measured; phase 3 (API, answers,
+UI) is untouched. The scorecard in §7 still describes the target, not the current state.
+Images are indexed and returned as metadata, but **not yet viewable** — the gap is broken down
+in §9a and is deliberately deferred, not forgotten.
+
+## 9. Next steps (in order)
+
+1. ~~**Get the actual dataset into the workspace**~~ ✅ `data/`, ingestion validated —
    see [`data-processing.md`](data-processing.md).
-2. Scaffold the backend (FastAPI) with the three endpoints; ingestion script producing chunks,
-   figure index and parameter index.
-3. Build the ~20-question eval set from the manuals (both personas, all three languages,
-   including one no-Italian-source question) — it doubles as the demo script.
-4. Chat UI, then evidence-validation polish and the pitch narrative:
-   *"the right technique per question type, every claim checkable."*
+2. ~~**Retrieval engine + benchmark**~~ ✅ hybrid keyword retrieval, router, language policy —
+   see [`retrieval.md`](retrieval.md).
+3. ~~**~20-question eval set**~~ ✅ `eval/questions.jsonl` (doubles as the demo script).
+4. **FastAPI backend** (G4 → Bonus 01): `GET /search`, `POST /ask`, `GET /products` over
+   `SearchEngine`; `/search` returns `to_dict()` unchanged. Second client (curl/Telegram) to prove
+   plug-and-play. **Carries the deferred image work from §9a** (media endpoint + figure route).
+5. **Answer composer + evidence validation** (G5): answer in the user's language, citation-required
+   prompt, numeric check (every number must occur in the retrieved chunks), quote check, and the
+   cited snippet + page + figure returned with the answer.
+6. **Chat UI**: streaming answer, clickable citations, inline figure (needs §9a's `image_url`).
+7. **Product profile cards** (G2): one card per robot for comparison/advisory questions.
+8. **Dense layer validation**: run `embed_index` + fusion on the same 20 questions, then extend the
+   benchmark with paraphrase cases.
+9. **Pitch narrative**: *"the right technique per question type, every claim checkable."*
+
+## 9a. Deferred: making images actually usable (G6)
+
+Parked on purpose (decided after the review), **must not be dropped** — the brief explicitly asks
+for "answer + citation + relevant image", and today we only have the retrieval side of it.
+State of play at `main` (`124e29d`): 476 figure chunks, 476/476 `image` paths resolve on disk,
+hits carry `"image": "images/en-p003R-fig01.png"` — and nothing can display or request them.
+
+**Three pieces, none of them big (belongs with step 4, the API):**
+
+1. **Media endpoint** — `GET /media/{doc_id}/{filename}` serving only `data/**/images/*.png`
+   (path-traversal safe, `Cache-Control: public, max-age=…`). Without it the browser cannot reach
+   the PNGs at all; hits should return `image_url` (absolute) next to the bare `image` path.
+2. **Picture intent (new route)** — "show me a picture of X", "Zeig mir ein Bild", "Mostrami una
+   foto", "what does X look like" → route `figure`: filter `chunk_type=figure`, prefer the
+   appearance/cover figure, return 2–3 images with their `Labels:` caption.
+   Measured gap: `"Show me a picture of the BellaBot"` → **0 hits** today (BM25 has no visual intent,
+   and the product name alone leaves no content words to score); `"Mostrami una foto della stazione
+   di ricarica CC1"` works only because of the product name.
+3. **Language-correct image choice** — the 476 PNGs are **all distinct** (0 byte-identical across
+   the 150 translation groups): each language's copy has its *labels rendered into the pixels*.
+   Returning the DE copy to an IT user shows German labels, so figure hits must follow the same
+   language policy (user's language first, cross-lingual fallback with a note) — reuse
+   `plan()`/`translation_group`, do not invent a second rule.
+
+**Explicitly *not* needed:** a vision model. The dataset already ships AI figure descriptions +
+`Labels:` legends ("images with transcriptions"), so we rank and serve text we already have; the
+figure chunk stays the retrieval unit.
+
+**Definition of done:** `/search` returns `image_url` for figure hits, the picture route answers
+"show me a picture of the BellaBot" with ≥1 image, a DE/IT question gets the matching-language
+figure, and one eval question (e.g. `L09`/`L10`) asserts an image path exists in the top hit.
