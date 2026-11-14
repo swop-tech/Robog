@@ -463,6 +463,9 @@ class ApiTest(unittest.TestCase):
         self.assertTrue(payload["answer"].startswith("Good news, that one is easy."))
         self.assertIn("30 kg [1]", payload["answer"])
         self.assertIsNone(payload["fallback_reason"])
+        self.assertEqual(
+            set(payload["timings"]), {"retrieval_ms", "generation_ms", "llm_calls"}
+        )
         verification = payload["verification"]
         self.assertTrue(verification["grounded"])
         self.assertEqual(verification["state"], "repaired")          # amber, not green

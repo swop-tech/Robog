@@ -98,7 +98,7 @@ to six recent user questions with each `/ask` request; those turns are used only
 to resolve references and never as evidence. What the API cannot do yet is
 labelled in Settings and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
 `api.js` (network) / `store.js` (state) / `render.js` + `markdown.js` (payload →
-HTML) / `app.js` (DOM), with 209 `node --test` cases plus an opt-in suite that
+HTML) / `app.js` (DOM), with 210 `node --test` cases plus an opt-in suite that
 drives a running server. Full details: [`../ui/README.md`](../ui/README.md).
 
 ## `GET /search` — standalone hybrid retrieval
@@ -163,7 +163,8 @@ The response leads with the contract from `docs/answering.md` §3 — `answer`,
 `language`, `route`, `citations`, `figures`, `params`, `verification`,
 `cross_lingual` — and keeps the rest of `Answer.to_dict()` as the audit trail
 (`provider`, `model`, `grounded`, `verified`, `source_languages`,
-`language_instruction`, `validation`, `notes`, `fallback_reason`, `latency_ms`;
+`language_instruction`, `validation`, `notes`, `fallback_reason`, `latency_ms`,
+`timings` (`retrieval_ms`, `generation_ms` for all model calls together, `llm_calls`);
 `search` and `evidence` only when asked for).
 
 `fallback_reason` is `null` when the model wrote the answer. When `provider` is
@@ -201,7 +202,8 @@ Example:
   "provider": "offline", "grounded": true, "verified": true,
   "source_languages": ["de"], "notes": ["offline formatter (GEMINI_API_KEY not set)"],
   "fallback_reason": "GEMINI_API_KEY not set",
-  "latency_ms": 9
+  "latency_ms": 9,
+  "timings": {"retrieval_ms": 6, "generation_ms": 0, "llm_calls": 0}
 }
 ```
 
@@ -300,6 +302,8 @@ laptop or in a container; `python -m api` exposes the same knobs as flags.
 | `ROBOG_API_CORS_ORIGINS` | `*` | comma-separated origins for the chat UI |
 | `ROBOG_API_HOST` / `ROBOG_API_PORT` | `0.0.0.0` / `8000` | bind address |
 | `ROBOG_LLM_PROVIDER` / `ROBOG_LLM_MODEL` | `auto` / `gemini-3.8-flash` | the answer generator |
+| `ROBOG_LLM_TIMEOUT` / `ROBOG_ANSWER_BUDGET` | `30` / `40` | seconds per model call / for all model calls of one answer; `0` removes the limit. Keep the budget under the UI's 60 s request timeout |
+| `ROBOG_LLM_THINKING` | `low` | `low`, `minimal`, `off` or `default`: how long the model reasons before it writes |
 
 ## Behaviour worth knowing
 

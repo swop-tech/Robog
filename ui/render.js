@@ -96,7 +96,7 @@ export function assistantCardHTML(message, { mediaUrl, icons } = {}) {
       <span class="meta-badge meta-badge--route" title="Retrieval route">${esc(routeLabel(p.route))}</span>
       ${p.language ? `<span class="meta-badge meta-badge--lang" title="Answer language">${esc(langName(p.language))}</span>` : ""}
       <span class="meta-badge meta-badge--provider" title="Answer generator">${provider}</span>
-      ${p.latency_ms != null ? `<span class="meta-latency">${esc(p.latency_ms)} ms</span>` : ""}
+      ${p.latency_ms != null ? `<span class="meta-latency" title="${esc(latencyTitle(p))}">${esc(p.latency_ms)} ms</span>` : ""}
     </div>`,
     fallbackNoteHTML(p),
     `<div class="answer md">${renderMarkdown(p.answer || "")}</div>`,
@@ -424,6 +424,17 @@ export function errorCardHTML(error, question, { icons } = {}) {
         </button>
       </div>
     </div>`;
+}
+
+/** Tooltip for the latency figure: where the time went (`timings` of POST /ask). */
+export function latencyTitle(payload) {
+  const t = payload?.timings;
+  if (!t || t.retrieval_ms == null) return "Time to answer";
+  const calls = t.llm_calls ?? 0;
+  const model = calls > 0
+    ? `model ${t.generation_ms ?? 0} ms in ${calls} ${calls === 1 ? "call" : "calls"}`
+    : "no model call";
+  return `Time to answer · retrieval ${t.retrieval_ms} ms · ${model}`;
 }
 
 export function statusChipHTML(health, { icons } = {}) {

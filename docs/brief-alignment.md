@@ -39,7 +39,7 @@ wikis are another, own ideas allowed — *pick it, build it, defend it.*
 | Quality of the answers (judged) | Offline formatter composes from evidence: exact parameter rows, profile-card comparisons, figure legends | accurate on lookups/comparisons; **terse on procedures, no persona register** — see §4.1 | **partly met** |
 | Ease of use (judged) | Zero-build assistant UI at `GET /`: starter chips, inline citations, spec + product cards, rendered figures, verification badge, raw-`/search` drawer, light/dark, saved conversations, settings | works desktop + mobile; **follow-up turns still need the backend** — see §4.3 | **partly met** |
 | Architecture you can defend (required) | Keyword hybrid (BM25 + parameter index + profile cards + figure route + language policy) with an optional dense layer (Chroma + Gemini/e5), RRF-fused | dense layer is **optional, unbuilt and unmeasured**; docs described a template pipeline that was never implemented — corrected in `gemini_chromadb_explanation.md` §2 | **defensible only with §4.4 closed** |
-| Working interface (required) | FastAPI + web chat, `python -m api` | 350 tests pass; `/health`, `/`, `/search`, `/ask`, `/products`, `/media` | **met** |
+| Working interface (required) | FastAPI + web chat, `python -m api` | 368 tests pass; `/health`, `/`, `/search`, `/ask`, `/products`, `/media` | **met** |
 | Bonus 01 — plug-and-play retrieval | `GET /search` returns `SearchResult.to_dict()` unchanged; `api/client.py` is a second client | 67 API tests | **met** |
 | Bonus 02 — many languages | Ask in EN/DE/IT, answer in the asker's language, disclose cross-lingual evidence | 100% answer-language match, 100% disclosure | **met** |
 
@@ -144,7 +144,7 @@ would make the numbers mean something to a judge.
 
 ```bash
 python -m ingest.run --data data                       # 63 files -> 1,351 chunks
-python -m unittest discover -s tests -p "test_*.py"    # 350 tests
+python -m unittest discover -s tests -p "test_*.py"    # 368 tests
 python -m retrieve.evaluate                            # keyword benchmark (Pass@8 100%, MRR 0.95)
 python -m answer.evaluate                              # answer benchmark, keyword floor
 python -m answer.evaluate --vector                     # same, through the hybrid (needs build/chroma)

@@ -86,6 +86,14 @@ def make_evidence(**overrides) -> Evidence:
     return evidence
 
 
+def _has_genai() -> bool:
+    try:
+        from google.genai import types  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class StubGenerator:
     """A generator that always answers with the text it was given."""
 
@@ -769,6 +777,104 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("ROBOG_LLM_MODEL=gemini-3.8-flash", report)
         self.assertIn("gemini-3.8-flash answered", report)
 
+    # -- time: no call may run unbounded ---------------------------------------
+    @unittest.skipUnless(_has_genai(), "google-genai not installed")
+    def test_every_call_carries_a_time_limit(self):
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_TIMEOUT": ""}):
+            default = GeminiGenerator(model="gemini-9-flash", client=_RecordingClient())
+        default.draft("p", make_evidence(), language="en")
+        self.assertEqual(default.timeout, 30.0)
+        self.assertEqual(_timeout_ms(default._client.configs[0]), 30_000)
+
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_TIMEOUT": "12"}):
+            from_env = GeminiGenerator(model="gemini-9-flash", client=_RecordingClient())
+        from_env.draft("p", make_evidence(), language="en")
+        self.assertEqual(_timeout_ms(from_env._client.configs[0]), 12_000)
+
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_TIMEOUT": "0"}):
+            unlimited = GeminiGenerator(model="gemini-9-flash", client=_RecordingClient())
+        unlimited.draft("p", make_evidence(), language="en")
+        self.assertIsNone(unlimited.timeout)
+        self.assertIsNone(_timeout_ms(unlimited._client.configs[0]))
+
+    @unittest.skipUnless(_has_genai(), "google-genai not installed")
+    def test_remaining_answer_time_caps_the_call(self):
+        client = _RecordingClient()
+        generator = GeminiGenerator(model="gemini-9-flash", client=client, timeout=30)
+        self.assertIsNotNone(generator.draft("p", make_evidence(), language="en", timeout=10))
+        self.assertLessEqual(_timeout_ms(client.configs[0]), 10_000)
+        self.assertGreater(_timeout_ms(client.configs[0]), 9_000)
+
+    def test_no_call_is_started_when_the_time_is_used_up(self):
+        client = _RecordingClient()
+        generator = GeminiGenerator(model="gemini-9-flash", client=client)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en", timeout=0.5))
+        self.assertEqual(client.configs, [])
+        self.assertIn("did not answer in time", generator.last_error)
+
+    def test_timed_out_call_is_not_repeated(self):
+        for message in ("ReadTimeout: timed out", "504 DEADLINE_EXCEEDED: Deadline expired"):
+            client = _RecordingClient(errors=[message, message, message])
+            sleeps: list[float] = []
+            generator = GeminiGenerator(
+                model="gemini-9-flash", client=client, attempts=3, sleep_fn=sleeps.append
+            )
+            self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+            self.assertEqual(len(client.configs), 1, message)
+            self.assertEqual(sleeps, [], message)
+            self.assertIn("did not answer in time", generator.last_error)
+            self.assertIn("ROBOG_LLM_TIMEOUT", generator.last_error)
+
+    def test_rate_limit_is_still_retried(self):
+        client = _RecordingClient(errors=["429 RESOURCE_EXHAUSTED: rate limit"])
+        sleeps: list[float] = []
+        generator = GeminiGenerator(model="gemini-9-flash", client=client, sleep_fn=sleeps.append)
+        self.assertIsNotNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertEqual(len(client.configs), 2)
+        self.assertEqual(len(sleeps), 1)
+
+    # -- thinking: brief by default --------------------------------------------
+    @unittest.skipUnless(_has_genai(), "google-genai not installed")
+    def test_model_is_asked_to_think_briefly(self):
+        cases = [
+            ({}, "gemini-3.8-flash", ("level", "LOW")),
+            ({}, "gemini-2.5-flash", ("budget", 1024)),          # the 2.x models take a budget
+            ({"ROBOG_LLM_THINKING": "off"}, "gemini-3.8-flash", ("level", "MINIMAL")),
+            ({"ROBOG_LLM_THINKING": "off"}, "gemini-2.5-flash", ("budget", 0)),
+            ({"ROBOG_LLM_THINKING": "default"}, "gemini-3.8-flash", None),
+            ({"ROBOG_LLM_THINKING": "nonsense"}, "gemini-3.8-flash", ("level", "LOW")),
+        ]
+        for env, model, expected in cases:
+            client = _RecordingClient()
+            with mock.patch.dict(os.environ, {"ROBOG_LLM_THINKING": "", **env}):
+                generator = GeminiGenerator(model=model, client=client)
+            generator.draft("p", make_evidence(), language="en")
+            self.assertEqual(_thinking(client.configs[0]), expected, (env, model))
+
+    @unittest.skipUnless(_has_genai(), "google-genai not installed")
+    def test_model_that_rejects_the_thinking_setting_is_called_without_it(self):
+        client = _RecordingClient(
+            errors=["400 INVALID_ARGUMENT: Thinking level is not supported for this model."]
+        )
+        generator = GeminiGenerator(model="gemini-9-flash", client=client, sleep_fn=lambda _s: None)
+        draft = generator.draft("p", make_evidence(), language="en")
+        self.assertIsNotNone(draft)
+        self.assertIsNone(generator.last_error)
+        self.assertEqual([_thinking(c) for c in client.configs], [("level", "LOW"), None])
+        # Remembered: the next answer does not pay for the rejected call again.
+        generator.draft("p", make_evidence(), language="en")
+        self.assertEqual(len(client.configs), 3)
+        self.assertIsNone(_thinking(client.configs[2]))
+
+    @unittest.skipUnless(_has_genai(), "google-genai not installed")
+    def test_other_invalid_argument_errors_are_still_reported(self):
+        bad_key = "400 INVALID_ARGUMENT: API key not valid. Please pass a valid API key."
+        client = _RecordingClient(errors=[bad_key, bad_key])
+        generator = GeminiGenerator(model="gemini-9-flash", client=client, sleep_fn=lambda _s: None)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertIn("API key was rejected", generator.last_error)
+        self.assertEqual(generator._plain_models, set())      # thinking was not the problem
+
     def test_model_can_be_overridden(self):
         client = _FakeClient("ok")
         generator = GeminiGenerator(model="gemini-2.5-pro", client=client)
@@ -827,6 +933,37 @@ class _ModelAwareClient:
             SimpleNamespace(name=f"models/{name}", supported_actions=["generateContent"])
             for name in self._listed
         ]
+
+
+class _RecordingClient:
+    """Keeps the ``config`` of every call; fails with ``errors`` in order, then answers."""
+
+    def __init__(self, errors=(), text_value="Load capacity is 20 kg [1]."):
+        self.errors = list(errors)
+        self.text_value = text_value
+        self.configs: list = []
+        self.models = SimpleNamespace(generate_content=self._generate)
+
+    def _generate(self, *, model, contents, config=None):
+        self.configs.append(config)
+        if self.errors:
+            raise RuntimeError(self.errors.pop(0))
+        return SimpleNamespace(text=self.text_value)
+
+
+def _timeout_ms(config):
+    options = getattr(config, "http_options", None)
+    return getattr(options, "timeout", None)
+
+
+def _thinking(config):
+    """``("level", "LOW")``, ``("budget", 1024)`` or ``None`` for one call's config."""
+    thinking = getattr(config, "thinking_config", None)
+    if thinking is None:
+        return None
+    if thinking.thinking_level is not None:
+        return ("level", getattr(thinking.thinking_level, "name", thinking.thinking_level))
+    return ("budget", thinking.thinking_budget)
 
 
 class _FailingClient:
@@ -1043,6 +1180,69 @@ class ComposerTests(unittest.TestCase):
         self.assertEqual(answer.provider, "offline")
         self.assertEqual(answer.fallback_reason, "GEMINI_API_KEY not set")
         self.assertIn("selected", chosen.fallback_reason)     # not blamed on a missing key
+
+    # -- time budget and timings -------------------------------------------------
+    def test_generator_is_told_how_much_time_is_left(self):
+        class Timed(StubGenerator):
+            accepts_timeout = True
+
+            def draft(self, prompt, evidence, *, language, route="default", question="", timeout=None):
+                self.timeouts = getattr(self, "timeouts", []) + [timeout]
+                return super().draft(prompt, evidence, language=language)
+
+        generator = Timed("Load capacity is 20 kg [1].", name="gemini")
+        AnswerComposer(SearchEngine([]), generator=generator, budget=25).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(len(generator.timeouts), 1)
+        self.assertLessEqual(generator.timeouts[0], 25)
+        self.assertGreater(generator.timeouts[0], 24)
+
+    def test_budget_comes_from_the_environment(self):
+        composer = AnswerComposer(SearchEngine([]), provider="offline")
+        with mock.patch.dict(os.environ, {"ROBOG_ANSWER_BUDGET": ""}):
+            self.assertEqual(composer.budget, 40.0)
+        with mock.patch.dict(os.environ, {"ROBOG_ANSWER_BUDGET": "15"}):
+            self.assertEqual(composer.budget, 15.0)
+        with mock.patch.dict(os.environ, {"ROBOG_ANSWER_BUDGET": "0"}):
+            self.assertIsNone(composer.budget)
+
+    def test_no_regeneration_when_the_time_is_used_up(self):
+        # 5 s is less than a regeneration needs, so the failed draft is not retried.
+        generator = StubGenerator("The robot carries 45 kg [1].", name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator, budget=5).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(len(generator.calls), 1)
+        self.assertEqual(answer.provider, "offline")
+        self.assertIn("number", answer.fallback_reason)
+        self.assertTrue(any("not regenerated" in note for note in answer.notes), answer.notes)
+        self.assertEqual(answer.timings["llm_calls"], 1)
+
+    def test_regeneration_still_happens_inside_the_budget(self):
+        generator = StubGenerator("The robot carries 45 kg [1].", name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator, budget=40).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(len(generator.calls), 2)
+        self.assertEqual(answer.timings["llm_calls"], 2)
+
+    def test_answer_says_where_the_time_went(self):
+        generator = StubGenerator("Load capacity is 20 kg [1].", name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "payload?", result=self._result()
+        )
+        timings = answer.to_dict()["timings"]
+        self.assertEqual(set(timings), {"retrieval_ms", "generation_ms", "llm_calls"})
+        self.assertEqual(timings["llm_calls"], 1)
+        offline = AnswerComposer(SearchEngine([]), provider="offline").answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(offline.timings["llm_calls"], 0)
+        greeting = AnswerComposer(SearchEngine([]), provider="offline").answer(
+            "hello", result=self._result()
+        )
+        self.assertEqual(greeting.timings["llm_calls"], 0)
 
     def test_retired_model_does_not_send_the_answer_to_the_formatter(self):
         """The reported case: ROBOG_LLM_MODEL names a model Google has retired."""
