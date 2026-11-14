@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 from .engine import SearchEngine
+from .vector import ChromaRetriever, VectorStoreUnavailable
 
 
 def main() -> None:
@@ -28,9 +30,26 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("--chunks", default="build/chunks.jsonl")
     parser.add_argument("--params", default="build/params.jsonl")
+    parser.add_argument("--vector", action="store_true",
+                        help="fuse dense results from Chroma (needs 'python -m ingest.embed_index' to have run; "
+                             "falls back to keyword-only with a warning)")
+    parser.add_argument("--chroma", default=None,
+                        help="path to the persisted Chroma DB "
+                             "(default: ROBOG_CHROMA_PATH or build/chroma)")
+    parser.add_argument("--collection", default=None,
+                        help="Chroma collection name (default: ROBOG_CHROMA_COLLECTION or robog)")
+    parser.add_argument("--provider", default=None, choices=["local", "gemini"],
+                        help="query embedding provider (default: ROBOG_EMBED_PROVIDER or local)")
     args = parser.parse_args()
 
-    engine = SearchEngine.from_build(args.chunks, args.params)
+    retriever = None
+    if args.vector:
+        try:
+            retriever = ChromaRetriever.connect(args.chroma, args.collection, args.provider)
+        except VectorStoreUnavailable as exc:
+            # Demo-safe: keyword retrieval still works, the warning says why.
+            print(f"warning: dense retrieval disabled: {exc}", file=sys.stderr)
+    engine = SearchEngine.from_build(args.chunks, args.params, vector=retriever)
     result = engine.search(
         args.query,
         k=args.k,
@@ -59,7 +78,8 @@ def main() -> None:
     print("\nChunks:")
     for hit in result.hits:
         kind = hit.chunk_type + (f" ({hit.image})" if hit.image else "")
-        print(f"  {hit.rank}. [{hit.score:.4f}] {kind}")
+        sources = "+".join(hit.sources) if hit.sources else "-"
+        print(f"  {hit.rank}. [{hit.score:.4f}] {kind}  [{sources}]")
         print(f"     {hit.text[:300].replace(chr(10), ' ')}")
         print(f"     ↳ {hit.citation}")
 
