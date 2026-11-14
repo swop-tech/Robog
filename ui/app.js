@@ -1,672 +1,1289 @@
-/* Robog web chat — zero-build vanilla ES module.
- *
- * The chat is only the first client of the retrieval service (Bonus 01):
- *   POST /ask     -> the grounded, validated answer (citations, figures, params, verification)
- *   GET  /search  -> the raw retrieval JSON, shown live in the drawer
- *   GET  /health  -> index + provider status
- *   GET  /media/… -> the figures (URLs are normalised to same-origin paths below)
- *
- * Everything the answer claims is already checked server-side (G5); this file
- * renders it and makes each claim one click away from its source.
- */
+/* ============================================================================
+   Telmekon AI Assistant — application wiring
+   ---------------------------------------------------------------------------
+   Zero-build ES module: the browser loads this file directly (`type="module"`),
+   there is no bundler, no framework and no CDN. It is split so that every part
+   can be tested on its own:
 
-// --------------------------------------------------------------------------
-// tiny helpers
-// --------------------------------------------------------------------------
+     api.js       the only module that talks to the network
+     store.js     conversations + settings (localStorage, reducer-style)
+     theme.js     light / dark / system
+     markdown.js  the answer renderer (escaping, tables, [n] citation markers)
+     render.js    payload -> HTML strings (pure, no DOM)
+     icons.js     inline SVG icon set
+     app.js       this file: DOM, events, focus, and nothing else
+
+   HONESTY RULES this file follows (the brief forbids simulating a backend):
+     * every visible control issues a real request or changes real local state;
+     * features the API does not have (streaming, server-side history, a
+       feedback endpoint, a regenerate endpoint) are labelled as such in the
+       settings dialog, driven by `CAPABILITIES` in api.js — never faked;
+     * conversations restored from localStorage re-render exactly what the API
+       returned before; their raw-`/search` pane starts empty and says so until
+       the user presses "Re-run live";
+     * an answer that could not be produced renders the API's own error text and,
+       for a 503, the API's own `fix` command.
+
+   The paths below are the display strings used in the raw-JSON drawer; the
+   requests themselves are built in api.js from the same endpoints.
+   ========================================================================== */
+
+import { brandMark, icon } from "./icons.js";
+import {
+  CAPABILITIES,
+  MAX_QUESTION_CHARS,
+  ask,
+  health,
+  mediaUrl,
+  products,
+  search,
+  searchUrlFor,
+} from "./api.js";
+import {
+  activeConversation,
+  addMessage,
+  askOptions,
+  createStore,
+  deleteConversation,
+  newConversation,
+  searchConversations,
+  selectConversation,
+  setFeedback,
+  titleFrom,
+  updateMessage,
+  updateSettings,
+} from "./store.js";
+import { initTheme } from "./theme.js";
+import {
+  assistantCardHTML,
+  assistantShellHTML,
+  citationModalHTML,
+  conversationListHTML,
+  drawerBodyHTML,
+  errorCardHTML,
+  statusChipHTML,
+  thinkingHTML,
+  userMessageHTML,
+} from "./render.js";
+import { esc, highlightJson, plainText } from "./markdown.js";
+
+/** Displayed in the drawer's request line; api.js does the actual fetching. */
+const ASK_PATH = "/ask";
+const SEARCH_PATH = "/search";
+const HEALTH_PATH = "/health";
+
+const HEALTH_REFRESH_MS = 60_000;
+const MOBILE_QUERY = "(max-width: 900px)";
+
+// ---------------------------------------------------------------------------
+// DOM
+// ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 
-/** Escape for HTML text *and* attribute contexts. */
-function esc(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+const els = {
+  app: $("app"),
+  sidebar: $("sidebar"),
+  sidebarBackdrop: $("sidebar-backdrop"),
+  newChat: $("new-chat"),
+  convSearch: $("conv-search"),
+  convList: $("conv-list"),
+  convCount: $("conv-count"),
+  sideStatus: $("side-status"),
+  openSidebar: $("open-sidebar"),
+  toggleSidebar: $("toggle-sidebar"),
+  chatTitle: $("chat-title"),
+  chatSub: $("chat-sub"),
+  status: $("status"),
+  statusLabel: $("status-label"),
+  docsLink: $("docs-link"),
+  scroller: $("scroller"),
+  capabilities: $("capabilities"),
+  welcome: $("welcome"),
+  chat: $("chat"),
+  toBottom: $("to-bottom"),
+  healthBanner: $("health-banner"),
+  form: $("ask-form"),
+  input: $("input"),
+  send: $("send"),
+  charCount: $("char-count"),
+  scopeRow: $("scope-row"),
+  live: $("live"),
+  citationOverlay: $("citation-overlay"),
+  citationBody: $("citation-body"),
+  drawer: $("drawer"),
+  drawerBackdrop: $("drawer-backdrop"),
+  drawerUrl: $("drawer-url"),
+  drawerTabs: $("drawer-tabs"),
+  drawerMeta: $("drawer-meta"),
+  drawerJson: $("drawer-json"),
+  drawerRerun: $("drawer-rerun"),
+  lightbox: $("lightbox"),
+  lightboxImg: $("lightbox-img"),
+  lightboxCaption: $("lightbox-caption"),
+  lightboxLabels: $("lightbox-labels"),
+  toast: $("toast"),
+  settingsOverlay: $("settings-overlay"),
+  settingsBody: $("settings-body"),
+};
 
-/** Escape only & < > — for the JSON <pre>, where quotes must stay literal. */
-function escText(value) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** The API returns absolute image_urls (http://host/media/…). Behind a preview
- *  proxy the browser must use its own origin, so keep only the path. */
-function mediaUrl(url) {
-  if (!url) return null;
-  try {
-    const u = new URL(url, location.origin);
-    return u.pathname + u.search;
-  } catch {
-    return url;
-  }
-}
-
-const LANG_NAME = { en: "English", de: "German", it: "Italian" };
-const langName = (code) => LANG_NAME[code] || (code || "").toUpperCase() || "—";
-const ROUTE_LABEL = { lookup: "Exact lookup", advisory: "Advisory", figure: "Figure", default: "General" };
-const routeLabel = (route) => ROUTE_LABEL[route] || route || "General";
-const KIND_LABEL = { param: "Parameter row", profile: "Product profile", chunk: "Manual passage" };
-const kindLabel = (kind) => KIND_LABEL[kind] || kind || "Source";
-
-// --------------------------------------------------------------------------
-// API
-// --------------------------------------------------------------------------
-const searchUrlFor = (question) => `/search?q=${encodeURIComponent(question)}&k=8`;
-
-async function apiAsk(question) {
-  const res = await fetch("/ask", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ question }),
-  });
-  if (!res.ok) {
-    let body = null;
-    try { body = await res.json(); } catch { /* non-JSON error */ }
-    const err = new Error(body?.detail || `HTTP ${res.status}`);
-    err.status = res.status;
-    err.body = body;
-    throw err;
-  }
-  return res.json();
-}
-
-async function apiSearch(question) {
-  const res = await fetch(searchUrlFor(question));
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-// --------------------------------------------------------------------------
-// markdown-lite + JSON highlighting
-// --------------------------------------------------------------------------
-/** Render the formatter's markdown subset: **bold**, "- " bullets, paragraphs,
- *  and [n] / [n, m] citation markers as clickable buttons. Input is escaped
- *  first, so no source text can inject markup. */
-function renderAnswer(text) {
-  const lines = esc(text).split("\n");
-  let html = "";
-  let inList = false;
-  const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
-  for (const raw of lines) {
-    const line = raw.replace(/\s+$/, "");
-    if (!line.trim()) { closeList(); continue; }
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    if (bullet) {
-      if (!inList) { html += "<ul>"; inList = true; }
-      html += `<li>${inline(bullet[1])}</li>`;
-    } else {
-      closeList();
-      html += `<p>${inline(line.trim())}</p>`;
-    }
-  }
-  closeList();
-  return html;
-}
-
-function inline(s) {
-  return s
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g, (_, nums) =>
-      nums
-        .split(/[,;]/)
-        .map((n) => n.trim())
-        .filter(Boolean)
-        .map((n) => `<button class="cite" type="button" data-ref="${n}" aria-label="Open source ${n}">[${n}]</button>`)
-        .join("")
-    );
-}
-
-/** Syntax-highlight a JSON value for the drawer (escaped, then token-wrapped). */
-function highlightJson(value) {
-  const json = escText(JSON.stringify(value, null, 2));
-  return json.replace(
-    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-    (match) => {
-      let cls = "j-num";
-      if (/^"/.test(match)) cls = /:$/.test(match) ? "j-key" : "j-str";
-      else if (/^(true|false)$/.test(match)) cls = "j-bool";
-      else if (/^null$/.test(match)) cls = "j-null";
-      return `<span class="${cls}">${match}</span>`;
-    }
-  );
-}
-
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // state
-// --------------------------------------------------------------------------
-const messages = new Map(); // id -> { role, question, payload, search, searchUrl, searchError }
-let nextId = 1;
-let busy = false;
-let drawerMsgId = null;
-let lastFocus = null;
+// ---------------------------------------------------------------------------
+const store = createStore(typeof localStorage === "undefined" ? null : localStorage, {
+  onWarn: (message) => notify(message, "warn"),
+});
 
-const messagesEl = $("messages");
-const welcomeEl = $("welcome");
-const chatEl = $("chat");
-const inputEl = $("input");
-const sendEl = $("send");
-const newChatBtn = $("new-chat");
-const drawerEl = $("drawer");
-const drawerBackdrop = $("drawer-backdrop");
-const citationOverlay = $("citation-overlay");
-const lightboxEl = $("lightbox");
+/** UI-only state — never persisted, never presented as server state. */
+const ui = {
+  busy: false,
+  health: null,
+  healthTimer: null,
+  tickTimer: null,
+  startedAt: 0,
+  pendingId: null,
+  filter: "",
+  drawer: { messageId: null, tab: "search" },
+  overlayStack: [],
+  lastFocus: null,
+  productCache: null,
+  deletedSnapshot: null,
+};
 
-// --------------------------------------------------------------------------
-// rendering: a bot answer
-// --------------------------------------------------------------------------
-function botCardHTML(p) {
-  const provider = p.provider === "offline"
-    ? "offline formatter"
-    : esc(p.provider + (p.model ? ` · ${p.model}` : ""));
-  const meta = `
-    <div class="msg-meta">
-      <span class="meta-badge meta-badge--route">${esc(routeLabel(p.route))}</span>
-      <span class="meta-badge meta-badge--lang">${esc(langName(p.language))}</span>
-      <span class="meta-badge meta-badge--provider">${provider}</span>
-      <span class="meta-latency">${esc(p.latency_ms ?? 0)} ms</span>
-    </div>`;
-
-  const specs = renderSpecs(p.params);
-  const figures = renderFigures(p.figures);
-  const cross = p.cross_lingual
-    ? `<div class="cross-badge">🌐 Answer in ${esc(langName(p.language))} · sources ${esc((p.source_languages || []).map((l) => l.toUpperCase()).join(", ") || "other languages")}</div>`
-    : "";
-
-  return `
-    <div class="bot-card">
-      ${meta}
-      <div class="answer">${renderAnswer(p.answer || "")}</div>
-      ${specs}
-      ${figures}
-      ${cross}
-      ${renderVerification(p.verification)}
-      ${renderSources(p.citations)}
-      <div class="msg-actions">
-        <button class="action-btn" type="button" data-action="raw">▤ Raw <code>/search</code> JSON</button>
-        <button class="action-btn" type="button" data-action="copy">⧉ Copy answer</button>
-      </div>
-    </div>`;
-}
-
-function renderSpecs(params) {
-  if (!params || !params.length) return "";
-  return params.map((p) => {
-    const sec = p.section_number || p.section || "";
-    const locator = [
-      p.product ? esc(p.product) : "",
-      sec ? `§${esc(sec)}` : "",
-      p.page != null ? `p. ${esc(p.page)}` : "",
-      p.language ? esc(p.language.toUpperCase()) : "",
-    ].filter(Boolean).join(" · ");
-    return `
-      <div class="spec-card">
-        <div class="spec-name">${esc(p.parameter || "Value")}</div>
-        <div class="spec-value">${esc(p.value || "")}</div>
-        <div class="spec-source">${locator}</div>
-      </div>`;
-  }).join("");
-}
-
-function renderFigures(figures) {
-  if (!figures || !figures.length) return "";
-  const cards = figures.map((f, i) => {
-    const url = mediaUrl(f.image_url);
-    const img = url
-      ? `<div class="figure-img-wrap"><img class="figure-img" src="${esc(url)}" alt="${esc(f.product || "Figure")}" loading="lazy" data-figure="${i}" /></div>`
-      : "";
-    const labels = (f.labels || []).map((l) => {
-      const m = String(l).match(/^(\d+)\s+(.*)$/);
-      return m
-        ? `<li class="label-chip"><b>${esc(m[1])}</b>${esc(m[2])}</li>`
-        : `<li class="label-chip">${esc(l)}</li>`;
-    }).join("");
-    const legend = labels
-      ? `<p class="labels-title">Labels</p><ul class="figure-labels">${labels}</ul>`
-      : "";
-    return `
-      <div class="figure-card">
-        ${img}
-        <div class="figure-body">
-          <p class="figure-caption">${esc(f.caption || "")}</p>
-          ${legend}
-        </div>
-      </div>`;
-  }).join("");
-  return `<div class="figures">${cards}</div>`;
-}
-
-function renderVerification(v) {
-  if (!v) return "";
-  // "checked" is false when there was no evidence at all: 0/0 claims passes
-  // every check vacuously, and a green "Verified" badge on "I could not find
-  // this" would certify nothing. Show a neutral badge instead.
-  const none = v.checked === false || v.state === "no-evidence";
-  const state = none ? "none" : v.verified ? "good" : v.grounded ? "warn" : "bad";
-  const icon = none ? "—" : v.verified ? "✓" : v.grounded ? "!" : "✕";
-  const label = none ? "Not answered from the manuals"
-    : v.verified ? "Verified" : v.grounded ? "Grounded" : "Check failed";
-  const counts = none ? ""
-    : ` · ${v.sentences_cited ?? 0}/${v.sentences_checked ?? 0} cited · ${v.numbers_verified ?? 0}/${v.numbers_checked ?? 0} numbers`;
-  return `
-    <div class="verify">
-      <button class="verify-badge verify-badge--${state}" type="button" data-action="verify" aria-expanded="false">
-        <span class="v-icon">${icon}</span><span>${esc(label)}</span>
-        <span class="v-counts">${esc(counts)}</span><span class="v-caret">▾</span>
-      </button>
-      <div class="verify-details" hidden>${verifyDetailsHTML(v)}</div>
-    </div>`;
-}
-
-function verifyDetailsHTML(v) {
-  const rate = (name, verified, checked, value) => {
-    const pct = Math.round((value ?? (checked ? verified / checked : 1)) * 100);
-    const cls = pct === 100 ? "" : pct >= 50 ? "rate-fill--warn" : "rate-fill--bad";
-    return `
-      <div class="rate">
-        <div class="rate-label"><span>${name}</span><b>${verified}/${checked}</b></div>
-        <div class="rate-bar"><div class="rate-fill ${cls}" style="width:${pct}%"></div></div>
-      </div>`;
-  };
-  const nothingChecked = v.checked === false || v.state === "no-evidence";
-  const issues = (v.issues || []).length
-    ? `<ul class="issues">${v.issues.map((it) =>
-        `<li class="issue ${it.severity === "error" ? "issue--error" : ""}"><b>${esc(it.check)} · ${esc(it.action || it.severity)}</b> — ${esc(it.message)}</li>`
-      ).join("")}</ul>`
-    : nothingChecked
-      ? `<p class="verify-summary" style="margin:12px 0 0;color:var(--muted)">The retrieval engine found no passage that answers this, so the checks had nothing to certify. Rephrase, name the robot, or ask for a parameter.</p>`
-      : `<p class="verify-summary" style="margin:12px 0 0;color:var(--good)">No issues — every claim is cited and every number matched the source.</p>`;
-  return `
-    <p class="verify-summary">${esc(v.summary || "")}</p>
-    ${nothingChecked ? "" : `<div class="verify-grid">
-      ${rate("Citations", v.sentences_cited ?? 0, v.sentences_checked ?? 0, v.citation_rate)}
-      ${rate("Numbers", v.numbers_verified ?? 0, v.numbers_checked ?? 0, v.numeric_rate)}
-      ${rate("Quotes", v.quotes_verified ?? 0, v.quotes_checked ?? 0, v.quote_rate)}
-    </div>`}
-    ${issues}`;
-}
-
-function renderSources(citations) {
-  if (!citations || !citations.length) return "";
-  const items = citations.map((c) =>
-    `<button class="source-chip" type="button" data-ref="${esc(c.n)}"><span class="s-n">[${esc(c.n)}]</span><span class="s-cit">${esc(c.citation || "")}</span></button>`
-  ).join("");
-  return `
-    <div class="sources">
-      <p class="sources-title">Sources (${citations.length})</p>
-      <div class="source-list">${items}</div>
-    </div>`;
-}
-
-function errorHTML(err, question) {
-  const is503 = err.status === 503;
-  const title = is503 ? "The search index isn’t built yet" : "Couldn’t reach the answer engine";
-  const msg = is503
-    ? esc(err.body?.reason || "The retrieval index is unavailable.")
-    : esc(err.message || "Network error — is the API running?");
-  const fix = err.body?.fix
-    ? `<p>Build it once, then retry:</p><code>${esc(err.body.fix)}</code>`
-    : "";
-  return `
-    <div class="error-card">
-      <h3>${title}</h3>
-      <p>${msg}</p>
-      ${fix}
-      <button class="action-btn" type="button" data-action="retry" data-question="${esc(question)}">↻ Retry</button>
-    </div>`;
-}
-
-// --------------------------------------------------------------------------
-// rendering: messages into the DOM
-// --------------------------------------------------------------------------
-function showChat() {
-  welcomeEl.hidden = true;
-  chatEl.hidden = false;
-  newChatBtn.hidden = false;
-}
-
-function addUserMessage(question) {
-  const id = String(nextId++);
-  messages.set(id, { role: "user", question });
-  const el = document.createElement("div");
-  el.className = "msg msg--user";
-  el.dataset.msgId = id;
-  el.innerHTML = `<div class="msg-avatar" aria-hidden="true">🧑</div><div class="msg-main"><div class="bubble">${esc(question)}</div></div>`;
-  messagesEl.appendChild(el);
-  return id;
-}
-
-function addBotPlaceholder() {
-  const id = String(nextId++);
-  messages.set(id, { role: "bot" });
-  const el = document.createElement("div");
-  el.className = "msg msg--bot";
-  el.dataset.msgId = id;
-  el.innerHTML = `
-    <div class="msg-avatar" aria-hidden="true">🤖</div>
-    <div class="msg-main"><div class="bot-card">
-      <div class="thinking"><span class="dots"><span></span><span></span><span></span></span>
-      <span>Retrieving evidence and verifying claims…</span></div>
-    </div></div>`;
-  messagesEl.appendChild(el);
-  return { id, el };
-}
-
-function scrollToLatest() {
-  requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }));
-}
-
-// --------------------------------------------------------------------------
-// the ask flow
-// --------------------------------------------------------------------------
-async function sendQuestion(raw) {
-  const question = (raw || "").trim();
-  if (!question || busy) return;
-  busy = true;
-  updateSend();
-  showChat();
-  addUserMessage(question);
-  const { id, el } = addBotPlaceholder();
-  scrollToLatest();
-
-  const searchUrl = searchUrlFor(question);
-  // /ask and /search run in parallel: the answer renders fast and the drawer
-  // is instant, while /search remains the honest, standalone Bonus 01 call.
-  const [askRes, searchRes] = await Promise.allSettled([apiAsk(question), apiSearch(question)]);
-  const main = el.querySelector(".msg-main");
-
-  if (askRes.status === "fulfilled") {
-    const payload = askRes.value;
-    messages.set(id, {
-      role: "bot",
-      question,
-      payload,
-      search: searchRes.status === "fulfilled" ? searchRes.value : null,
-      searchUrl,
-      searchError: searchRes.status === "rejected" ? String(searchRes.reason?.message || searchRes.reason) : null,
-    });
-    main.innerHTML = botCardHTML(payload);
-  } else {
-    messages.set(id, { role: "bot", question, searchUrl });
-    main.innerHTML = errorHTML(askRes.reason, question);
+const settings = () => store.state.settings;
+const conversation = () => activeConversation(store.state);
+const findMessage = (id) => {
+  for (const c of store.state.conversations) {
+    const found = c.messages.find((m) => m.id === id);
+    if (found) return { conversation: c, message: found };
   }
-  busy = false;
-  updateSend();
-  scrollToLatest();
-}
+  return null;
+};
 
-// --------------------------------------------------------------------------
-// citation modal
-// --------------------------------------------------------------------------
-function openCitation(msgId, ref) {
-  const m = messages.get(msgId);
-  const c = m?.payload?.citations?.find((x) => String(x.n) === String(ref));
-  const content = $("citation-content");
-  if (!c) {
-    content.innerHTML = `<div class="cit-head"><span class="cit-n">${esc(ref)}</span><h3 class="cit-title" id="citation-title">Source</h3></div><p>No detail available for this reference.</p>`;
-  } else {
-    const url = mediaUrl(c.image_url);
-    const badges = [
-      `<span class="cit-badge cit-badge--kind">${esc(kindLabel(c.kind))}</span>`,
-      c.language ? `<span class="cit-badge cit-badge--lang">${esc(c.language.toUpperCase())}</span>` : "",
-      c.product ? `<span class="cit-badge">${esc(c.product)}</span>` : "",
-    ].join("");
-    const loc = (k, v) => `<div><span class="k">${k}</span><span class="v">${esc(v ?? "—")}</span></div>`;
-    const locator = [
-      loc("Manual", c.title),
-      loc("Section", c.section ? `§${c.section}` : "—"),
-      loc("PDF page", c.page != null ? `p. ${c.page}` : "—"),
-    ].join("");
-    const snippet = c.excerpt
-      ? `<p class="cit-snippet-label">Source snippet</p><blockquote class="cit-snippet">${esc(c.excerpt)}</blockquote>`
-      : "";
-    const image = url
-      ? `<div class="cit-image"><img src="${esc(url)}" alt="${esc(c.product || "figure")}" data-lightbox="${esc(url)}" data-caption="${esc(c.citation || "")}" /></div>`
-      : "";
-    content.innerHTML = `
-      <div class="cit-head"><span class="cit-n">${esc(c.n)}</span><h3 class="cit-title" id="citation-title">${esc(c.title || "Source")}</h3></div>
-      <div class="cit-badges">${badges}</div>
-      <div class="cit-locator">${locator}</div>
-      ${snippet}
-      ${image}
-      <p class="cit-full">${esc(c.citation || "")}</p>`;
-  }
-  showOverlay("citation");
-}
-
-// --------------------------------------------------------------------------
-// raw /search drawer (Bonus 01, live)
-// --------------------------------------------------------------------------
-function openDrawer(msgId) {
-  drawerMsgId = msgId;
-  const m = messages.get(msgId);
-  $("drawer-url").textContent = location.origin + (m?.searchUrl || "");
-  renderDrawer(m);
-  drawerEl.hidden = false;
-  drawerBackdrop.hidden = false;
-  focusFirst(drawerEl);
-}
-
-function renderDrawer(m) {
-  const meta = $("drawer-meta");
-  const pre = $("drawer-json");
-  if (m?.search) {
-    const s = m.search;
-    const items = [
-      ["route", s.route], ["language", (s.language || "").toUpperCase()],
-      ["confidence", s.confidence], ["hits", (s.hits || []).length],
-      ["params", (s.params || []).length], ["profiles", (s.profiles || []).length],
-    ];
-    if (s.cross_lingual) items.push(["cross-lingual", "yes"]);
-    meta.innerHTML = items.map(([k, v]) => `<span class="dm-item">${esc(k)} <b>${esc(v ?? "—")}</b></span>`).join("");
-    pre.innerHTML = highlightJson(s);
-  } else if (m?.searchError) {
-    meta.innerHTML = "";
-    pre.innerHTML = `<span class="j-null">// /search failed: ${escText(m.searchError)}\n// Press “Re-run live” to try again.</span>`;
-  } else {
-    meta.innerHTML = "";
-    pre.innerHTML = `<span class="j-null">// loading…</span>`;
-  }
-}
-
-async function rerunDrawer() {
-  const m = messages.get(drawerMsgId);
-  if (!m) return;
-  const btn = $("drawer-rerun");
-  btn.disabled = true;
-  $("drawer-json").innerHTML = `<span class="j-null">// calling GET /search live…</span>`;
-  try {
-    m.search = await apiSearch(m.question);
-    m.searchError = null;
-  } catch (err) {
-    m.searchError = String(err.message || err);
-  } finally {
-    btn.disabled = false;
-    renderDrawer(m);
-  }
-}
-
-// --------------------------------------------------------------------------
-// lightbox
-// --------------------------------------------------------------------------
-function openLightbox(url, caption) {
-  if (!url) return;
-  $("lightbox-img").src = url;
-  $("lightbox-img").alt = caption || "Figure";
-  $("lightbox-caption").textContent = caption || "";
-  showOverlay("lightbox");
-}
-
-// --------------------------------------------------------------------------
-// overlay plumbing
-// --------------------------------------------------------------------------
-function showOverlay(name) {
-  lastFocus = document.activeElement;
-  const el = name === "citation" ? citationOverlay : name === "lightbox" ? lightboxEl : drawerEl;
-  el.hidden = false;
-  if (name === "drawer") drawerBackdrop.hidden = false;
-  focusFirst(el);
-}
-
-function closeOverlay(name) {
-  if (name === "citation") citationOverlay.hidden = true;
-  else if (name === "lightbox") lightboxEl.hidden = true;
-  else if (name === "drawer") { drawerEl.hidden = true; drawerBackdrop.hidden = true; }
-  if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
-}
-
-function focusFirst(el) {
-  const target = el.querySelector(".modal-x, button, [tabindex]");
-  if (target) requestAnimationFrame(() => target.focus());
-}
-
-// --------------------------------------------------------------------------
-// status + misc UI
-// --------------------------------------------------------------------------
-async function checkHealth() {
-  const status = $("status");
-  const label = status.querySelector(".status-label");
-  try {
-    const res = await fetch("/health");
-    const data = await res.json();
-    const provider = data.provider?.provider === "gemini" ? "Gemini" : "offline";
-    if (data.ready) {
-      status.className = "status status--ready";
-      label.textContent = `ready · ${provider}`;
-      status.title = `${data.chunks} chunks · ${data.params} params · ${data.products} products · ${data.media_files} figures · provider: ${provider}`;
-    } else {
-      status.className = "status status--down";
-      label.textContent = "index not built";
-      status.title = data.detail || "Run: python -m ingest.run --data data";
-    }
-  } catch {
-    status.className = "status status--down";
-    label.textContent = "offline";
-    status.title = "Cannot reach /health — is the API running?";
-  }
+// ---------------------------------------------------------------------------
+// small helpers
+// ---------------------------------------------------------------------------
+function announce(text) {
+  if (els.live) els.live.textContent = text || "";
 }
 
 let toastTimer = null;
-function toast(msg) {
-  const el = $("toast");
-  el.textContent = msg;
-  el.hidden = false;
+/** A toast is a real message about a real outcome — never a fake success. */
+function notify(message, kind = "info", action = null) {
+  if (!els.toast) return;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 1800);
+  els.toast.className = `toast${kind === "warn" ? " toast--warn" : kind === "error" ? " toast--error" : ""}`;
+  els.toast.innerHTML = `<span>${esc(message)}</span>`;
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-action";
+    button.textContent = action.label;
+    button.addEventListener("click", () => {
+      hideToast();
+      action.onClick();
+    });
+    els.toast.appendChild(button);
+  }
+  els.toast.hidden = false;
+  toastTimer = setTimeout(hideToast, action ? 7000 : 3600);
 }
 
-async function copyText(text, okMsg) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast(okMsg);
-  } catch {
-    toast("Copy failed — select the text manually.");
+function hideToast() {
+  clearTimeout(toastTimer);
+  if (els.toast) els.toast.hidden = true;
+}
+
+/** Keep only what survives JSON: an `Error`'s `message` is not enumerable. */
+function serializeError(error) {
+  return {
+    kind: error?.kind || "http",
+    message: error?.message || String(error || "Unknown error"),
+    status: error?.status ?? null,
+    reason: error?.reason || null,
+    fix: error?.fix || null,
+  };
+}
+
+function scrollToBottom(force = false) {
+  if (!els.scroller) return;
+  const near = els.scroller.scrollHeight - els.scroller.scrollTop - els.scroller.clientHeight < 140;
+  if (force || near || settings().autoScroll) {
+    els.scroller.scrollTo({ top: els.scroller.scrollHeight, behavior: force ? "auto" : "smooth" });
   }
 }
 
-function updateSend() {
-  sendEl.disabled = busy || !inputEl.value.trim();
+// ---------------------------------------------------------------------------
+// overlays: citation modal, drawer, lightbox, settings — one focus discipline
+// ---------------------------------------------------------------------------
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function openOverlay(panel, { onClose = null, labelledBy = null } = {}) {
+  if (!panel) return;
+  ui.lastFocus = document.activeElement;
+  panel.hidden = false;
+  ui.overlayStack.push({ panel, onClose });
+  if (labelledBy) panel.setAttribute("aria-labelledby", labelledBy);
+  const first = panel.querySelector(FOCUSABLE);
+  (first || panel).focus?.();
 }
 
-function autoGrow() {
-  inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + "px";
-}
-
-function resetChat() {
-  messages.clear();
-  messagesEl.innerHTML = "";
-  chatEl.hidden = true;
-  welcomeEl.hidden = false;
-  newChatBtn.hidden = true;
-  inputEl.focus();
-}
-
-// --------------------------------------------------------------------------
-// events
-// --------------------------------------------------------------------------
-$("composer").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const q = inputEl.value;
-  inputEl.value = "";
-  autoGrow();
-  updateSend();
-  sendQuestion(q);
-});
-
-inputEl.addEventListener("input", () => { autoGrow(); updateSend(); });
-inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    $("composer").requestSubmit();
+function closeOverlay(panel) {
+  const index = ui.overlayStack.findIndex((entry) => entry.panel === panel);
+  if (index === -1) return;
+  const [entry] = ui.overlayStack.splice(index, 1);
+  entry.panel.hidden = true;
+  if (!ui.overlayStack.length) {
+    ui.lastFocus?.focus?.();
+    ui.lastFocus = null;
   }
-});
+  entry.onClose?.();
+}
 
-$("chips").addEventListener("click", (e) => {
-  const chip = e.target.closest(".chip");
-  if (chip) sendQuestion(chip.dataset.question);
-});
+function closeTopOverlay() {
+  const top = ui.overlayStack[ui.overlayStack.length - 1];
+  if (top) closeOverlay(top.panel);
+}
 
-newChatBtn.addEventListener("click", resetChat);
+function trapFocus(panel, event) {
+  const nodes = [...panel.querySelectorAll(FOCUSABLE)].filter((n) => n.getClientRects().length > 0);
+  if (!nodes.length) return;
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
-// delegated actions inside the conversation
-messagesEl.addEventListener("click", (e) => {
-  const msgEl = e.target.closest("[data-msg-id]");
-  if (!msgEl) return;
-  const id = msgEl.dataset.msgId;
+// -- citation modal ---------------------------------------------------------
+let currentCitation = null;
 
-  const cite = e.target.closest(".cite, .source-chip");
-  if (cite) { openCitation(id, cite.dataset.ref); return; }
+function openCitation(messageId, n) {
+  const found = findMessage(messageId);
+  const citations = found?.message?.payload?.citations || [];
+  currentCitation = citations.find((c) => String(c.n) === String(n)) || null;
+  if (currentCitation) {
+    els.citationBody.innerHTML = citationModalHTML(currentCitation, { mediaUrl, icons: icon });
+  } else {
+    // A `[n]` marker with no citation behind it is a payload defect: say so
+    // instead of showing an empty dialog that looks like a source.
+    els.citationBody.innerHTML = `
+      <div class="cit-head"><span class="cit-n">${esc(n)}</span>
+        <h3 class="cit-title" id="citation-title">No source ${esc(n)} in this response</h3></div>
+      <p class="cit-missing">The answer cites [${esc(n)}] but <code>POST /ask</code> returned
+        ${citations.length} citation(s)${citations.length ? `: ${esc(citations.map((c) => c.n).join(", "))}` : ""}.
+        Nothing is shown here rather than inventing a source.</p>`;
+  }
+  openOverlay(els.citationOverlay, { labelledBy: "citation-title" });
+}
 
-  const fig = e.target.closest(".figure-img");
-  if (fig) {
-    const f = messages.get(id)?.payload?.figures?.[Number(fig.dataset.figure)];
-    if (f) openLightbox(mediaUrl(f.image_url), f.caption);
+// -- lightbox ---------------------------------------------------------------
+/**
+ * Full-size figure. The `Labels` legend is rebuilt here (not in render.js) so
+ * the lightbox carries the same numbered callouts the manual page has.
+ */
+function openLightbox(src, { caption = "", labels = [], alt = "" } = {}) {
+  const url = mediaUrl(src);
+  if (!url) {
+    notify("This figure has no image path in the API response.", "warn");
+    return;
+  }
+  els.lightboxImg.src = url;
+  els.lightboxImg.alt = alt || caption || "Manual figure";
+  els.lightboxCaption.textContent = caption || "";
+  els.lightboxCaption.hidden = !caption;
+  const list = (labels || []).filter(Boolean);
+  els.lightboxLabels.innerHTML = list.length
+    ? `<p class="labels-title">Labels</p><ul class="figure-labels">${list
+        .map((label) => {
+          const match = String(label).match(/^(\d+)\s+(.*)$/);
+          return match
+            ? `<li class="label-chip"><b>${esc(match[1])}</b>${esc(match[2])}</li>`
+            : `<li class="label-chip">${esc(label)}</li>`;
+        })
+        .join("")}</ul>`
+    : "";
+  els.lightboxLabels.hidden = !list.length;
+  openOverlay(els.lightbox);
+}
+
+// -- the raw-JSON drawer (Bonus 01) ----------------------------------------
+/**
+ * Open the drawer for one answer. Two tabs, both backed by real requests:
+ *
+ *   GET  /search   the retrieval layer on its own, re-run live on demand
+ *   POST /ask      the exact request this UI sent and the exact response it got
+ *
+ * @param {string} messageId
+ * @param {"search"|"ask"} tab
+ */
+export function openDrawer(messageId, tab = "search") {
+  const found = findMessage(messageId);
+  if (!found) {
+    notify("That answer is no longer in this browser's history.", "warn");
+    return;
+  }
+  ui.drawer = { messageId, tab };
+  els.drawerBackdrop.hidden = false;
+  paintDrawer();
+  openOverlay(els.drawer, {
+    labelledBy: "drawer-title",
+    onClose: () => {
+      els.drawerBackdrop.hidden = true;
+    },
+  });
+}
+
+function closeDrawer() {
+  els.drawerBackdrop.hidden = true;
+  closeOverlay(els.drawer);
+}
+
+function paintDrawer() {
+  const found = findMessage(ui.drawer.messageId);
+  if (!found) return;
+  const message = found.message;
+  const tab = ui.drawer.tab;
+  const opts = askOptions(settings());
+
+  for (const button of els.drawerTabs.querySelectorAll("[data-tab]")) {
+    const active = button.dataset.tab === tab;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  if (tab === "ask") {
+    els.drawerUrl.textContent = `POST ${ASK_PATH}`;
+    els.drawerMeta.innerHTML = [
+      ["question", message.question],
+      ["route", message.payload?.route],
+      ["language", message.payload?.language],
+      ["provider", message.payload?.provider],
+      ["citations", (message.payload?.citations || []).length],
+      ["latency_ms", message.payload?.latency_ms],
+    ]
+      .filter(([, value]) => value != null && value !== "")
+      .map(([key, value]) => `<span class="dm-item">${esc(key)} <b>${esc(value)}</b></span>`)
+      .join("");
+    els.drawerJson.innerHTML = message.payload
+      ? highlightJson({ request: message.request || { question: message.question }, response: message.payload })
+      : `<span class="j-null">// This answer has no stored response.\n// Press “Re-run live” to call POST ${ASK_PATH} again.</span>`;
+    els.drawerRerun.textContent = "Re-run POST /ask";
     return;
   }
 
-  const action = e.target.closest("[data-action]");
-  if (!action) return;
-  const act = action.dataset.action;
-  if (act === "verify") {
-    const details = action.parentElement.querySelector(".verify-details");
-    const willOpen = details.hidden;
-    details.hidden = !willOpen;
-    action.setAttribute("aria-expanded", String(willOpen));
-  } else if (act === "raw") {
-    openDrawer(id);
-  } else if (act === "copy") {
-    const p = messages.get(id)?.payload;
-    if (p) copyText(p.answer || "", "Answer copied");
-  } else if (act === "retry") {
-    sendQuestion(action.dataset.question);
+  els.drawerUrl.textContent = searchUrlFor(message.question, opts);
+  const body = drawerBodyHTML(message);
+  els.drawerMeta.innerHTML = body.meta;
+  els.drawerJson.innerHTML = body.json;
+  els.drawerRerun.textContent = "Re-run live";
+}
+
+/** Re-run the active drawer tab. Both branches are real network calls. */
+async function rerunDrawer() {
+  const found = findMessage(ui.drawer.messageId);
+  if (!found || ui.busy) return;
+  const message = found.message;
+  const opts = askOptions(settings());
+  els.drawerRerun.disabled = true;
+  const started = performance.now();
+  try {
+    if (ui.drawer.tab === "ask") {
+      const payload = await ask(message.question, { ...opts, ...(message.request || {}) });
+      store.set((state) => updateMessage(state, found.conversation.id, message.id, { payload, error: null, pending: false }));
+      paintMessage({ ...message, payload, error: null, pending: false });
+      notify(`POST ${ASK_PATH} answered again in ${Math.round(performance.now() - started)} ms.`);
+    } else {
+      const payload = await search(message.question, opts);
+      store.set((state) => updateMessage(state, found.conversation.id, message.id, { search: payload, searchError: null }));
+      notify(`GET ${SEARCH_PATH} returned ${(payload?.hits || []).length} hit(s).`);
+    }
+    paintDrawer();
+  } catch (error) {
+    const detail = serializeError(error);
+    if (ui.drawer.tab === "search") {
+      store.set((state) => updateMessage(state, found.conversation.id, message.id, { searchError: detail.message }));
+    }
+    paintDrawer();
+    notify(detail.message, "error");
+  } finally {
+    els.drawerRerun.disabled = false;
   }
-});
+}
 
-// global closers + citation-image lightbox
-document.addEventListener("click", (e) => {
-  const closer = e.target.closest("[data-close]");
-  if (closer) { closeOverlay(closer.dataset.close); return; }
-  const lb = e.target.closest("[data-lightbox]");
-  if (lb) openLightbox(lb.dataset.lightbox, lb.dataset.caption || "");
-});
+// ---------------------------------------------------------------------------
+// painting
+// ---------------------------------------------------------------------------
+function messageHTML(message) {
+  if (message.role === "user") return userMessageHTML(message);
+  if (message.pending) return assistantShellHTML(message.id, thinkingHTML());
+  if (message.error) {
+    return assistantShellHTML(message.id, errorCardHTML(message.error, message.question, { icons: icon }));
+  }
+  return assistantShellHTML(message.id, assistantCardHTML(message, { mediaUrl, icons: icon }));
+}
 
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
-  if (!lightboxEl.hidden) closeOverlay("lightbox");
-  else if (!drawerEl.hidden) closeOverlay("drawer");
-  else if (!citationOverlay.hidden) closeOverlay("citation");
-});
+/** Replace (or append) exactly one message element — no full re-render. */
+function paintMessage(message) {
+  const existing = els.chat.querySelector(`[data-msg-id="${CSS.escape(message.id)}"]`);
+  const html = messageHTML(message);
+  if (existing) {
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+    existing.replaceWith(template.content.firstChild);
+  } else {
+    els.chat.insertAdjacentHTML("beforeend", html);
+  }
+}
 
-$("drawer-rerun").addEventListener("click", rerunDrawer);
-$("drawer-copy").addEventListener("click", () => {
-  const m = messages.get(drawerMsgId);
-  if (m?.search) copyText(JSON.stringify(m.search, null, 2), "JSON copied");
-});
+/** Titles, welcome/chat visibility and the scope chips — no message rebuild. */
+function syncHeader() {
+  const conv = conversation();
+  const messages = conv?.messages || [];
+  els.chat.hidden = messages.length === 0;
+  els.welcome.hidden = messages.length > 0;
+  els.chatTitle.textContent = conv && conv.messages.length ? conv.title : "Telmekon AI Assistant";
+  els.chatSub.textContent = messages.length
+    ? `${messages.filter((m) => m.role === "user").length} question(s) · stored in this browser`
+    : "Grounded answers from the Pudu Robotics manuals — every claim cited";
+  els.toBottom.hidden = messages.length === 0;
+  updateScopeRow();
+}
 
-// --------------------------------------------------------------------------
-// init
-// --------------------------------------------------------------------------
-checkHealth();
-updateSend();
-inputEl.focus();
+function paintConversation() {
+  const conv = conversation();
+  els.chat.innerHTML = (conv?.messages || []).map(messageHTML).join("");
+  syncHeader();
+  scrollToBottom(true);
+}
+
+function paintSidebar() {
+  const state = store.state;
+  const list = searchConversations(state, ui.filter);
+  els.convList.innerHTML = conversationListHTML(list, state.activeId);
+  els.convCount.textContent = String(list.length);
+  els.convSearch.value = ui.filter;
+}
+
+function updateScopeRow() {
+  const s = settings();
+  const chips = [];
+  if (s.product) chips.push(["product", s.product, "product"]);
+  if (s.language) chips.push(["answer in", s.language.toUpperCase(), "language"]);
+  if (s.provider) chips.push(["generator", s.provider, "provider"]);
+  if (s.crossLingualFallback === false) chips.push(["cross-lingual fallback", "off", "crossLingualFallback"]);
+  if (s.followUserLanguage === false) chips.push(["follow question language", "off", "followUserLanguage"]);
+  if (!chips.length) {
+    els.scopeRow.hidden = true;
+    els.scopeRow.innerHTML = "";
+    return;
+  }
+  els.scopeRow.hidden = false;
+  els.scopeRow.innerHTML = chips
+    .map(
+      ([label, value, key]) =>
+        `<span class="scope-chip" title="Change this in Settings">${esc(label)} <b>${esc(value)}</b>
+           <button type="button" data-action="clear-scope" data-key="${key}" aria-label="Remove ${esc(label)} filter">×</button></span>`
+    )
+    .join("");
+}
+
+function paintStatus() {
+  const chip = statusChipHTML(ui.health, { icons: icon });
+  els.status.className = `status ${chip.className}${ui.health ? "" : " status--loading"}`;
+  els.status.title = chip.title || "";
+  els.statusLabel.textContent = chip.label;
+  els.status.setAttribute("aria-label", `API status: ${chip.label}. Activate to check ${HEALTH_PATH} again.`);
+  els.sideStatus.className = `side-status ${chip.className === "status--ready" ? "is-ready" : "is-down"}`;
+  els.sideStatus.title = chip.title || "";
+  els.sideStatus.querySelector(".label").textContent = chip.label;
+
+  const banner = els.healthBanner;
+  if (ui.health && ui.health.reachable !== false && !ui.health.ready) {
+    banner.hidden = false;
+    banner.innerHTML = `${icon("alert", { size: 16 })}
+      <p><b>The retrieval index is not built.</b> ${esc(ui.health.detail || "")}
+      Run <code>python -m ingest.run --data data</code> once, then press Retry — questions will fail with
+      <code>503</code> until then.</p>`;
+  } else {
+    banner.hidden = true;
+  }
+}
+
+async function refreshHealth({ quiet = false } = {}) {
+  try {
+    ui.health = await health();
+  } catch (error) {
+    ui.health = { reachable: false, ready: false, detail: serializeError(error).message };
+  }
+  paintStatus();
+  if (!quiet) {
+    const chip = statusChipHTML(ui.health, { icons: icon });
+    notify(`${HEALTH_PATH}: ${chip.label}`, ui.health?.ready ? "info" : "warn");
+  }
+  return ui.health;
+}
+
+// ---------------------------------------------------------------------------
+// asking
+// ---------------------------------------------------------------------------
+function validate(question) {
+  if (!question) return "Type a question first.";
+  if (question.length > MAX_QUESTION_CHARS) {
+    return `Questions are limited to ${MAX_QUESTION_CHARS} characters (the API rejects longer ones with 422).`;
+  }
+  return null;
+}
+
+/**
+ * One question = two real calls in parallel:
+ *   POST /ask    the grounded answer (the message)
+ *   GET  /search the retrieval layer behind it (the raw drawer, Bonus 01)
+ * `allSettled` so a `/search` failure never hides a good answer.
+ */
+async function submitQuestion(rawQuestion, { regenerateOf = null } = {}) {
+  const question = String(rawQuestion || "").replace(/\s+/g, " ").trim();
+  const problem = validate(question);
+  if (problem) {
+    notify(problem, "warn");
+    return;
+  }
+  if (ui.busy) {
+    notify("Still working on the previous question.", "warn");
+    return;
+  }
+
+  const opts = askOptions(settings());
+  const request = { question, ...opts };
+  ui.busy = true;
+  ui.startedAt = performance.now();
+  els.send.disabled = true;
+  els.input.disabled = Boolean(regenerateOf);
+
+  let messageId;
+  if (regenerateOf) {
+    messageId = regenerateOf;
+    const found = findMessage(messageId);
+    store.set((state) =>
+      updateMessage(state, found.conversation.id, messageId, { pending: true, error: null, request })
+    );
+    paintMessage({ ...found.message, pending: true, error: null, request });
+  } else {
+    const userMessage = { id: `u-${Date.now().toString(36)}`, role: "user", question, text: question, createdAt: new Date().toISOString() };
+    messageId = `a-${Date.now().toString(36)}`;
+    const botMessage = { id: messageId, role: "assistant", question, request, pending: true, createdAt: new Date().toISOString() };
+    store.set((state) => addMessage(addMessage(state, userMessage), botMessage));
+    els.input.value = "";
+    autosize();
+    updateCharCount();
+    paintSidebar();
+    paintMessage(userMessage);
+    paintMessage(botMessage);
+  }
+
+  syncHeader();
+  announce("Asking the manuals…");
+  startTicker(messageId);
+
+  const [askResult, searchResult] = await Promise.allSettled([ask(question, request), search(question, opts)]);
+
+  stopTicker();
+  ui.busy = false;
+  els.send.disabled = !els.input.value.trim();
+  els.input.disabled = false;
+
+  const found = findMessage(messageId);
+  if (!found) return;
+
+  if (askResult.status === "fulfilled") {
+    const payload = askResult.value;
+    const patch = {
+      payload,
+      pending: false,
+      error: null,
+      search: searchResult.status === "fulfilled" ? searchResult.value : null,
+      searchError: searchResult.status === "rejected" ? serializeError(searchResult.reason).message : null,
+    };
+    store.set((state) => updateMessage(state, found.conversation.id, messageId, patch));
+    paintMessage({ ...found.message, ...patch });
+    paintSidebar();
+    scrollToBottom();
+    announceCrossLingual(messageId);
+    const citations = (payload.citations || []).length;
+    announce(`Answer ready in ${payload.language || "the question's language"} with ${citations} source(s).`);
+    // A successful answer proves the index exists: clear a stale "not built"
+    // banner instead of waiting for the next 60 s poll.
+    if (ui.health && !ui.health.ready) refreshHealth({ quiet: true });
+    if (payload.provider === "offline") {
+      notify("Answered by the offline formatter — set GEMINI_API_KEY on the server for prose answers.", "warn");
+    }
+  } else {
+    const error = serializeError(askResult.reason);
+    const patch = { pending: false, error, payload: null };
+    store.set((state) => updateMessage(state, found.conversation.id, messageId, patch));
+    paintMessage({ ...found.message, ...patch });
+    paintSidebar();
+    scrollToBottom();
+    announce(`The question failed: ${error.message}`);
+    // Any failure is worth a status re-check: a 503 means the index is missing,
+    // a network error means the API itself is gone. The pill must say which.
+    refreshHealth({ quiet: true });
+  }
+  els.input.focus();
+}
+
+/**
+ * The cross-lingual badge is visual-only; screen readers get the same fact from
+ * the live region, and the drawer keeps the raw `tiers_used` evidence.
+ */
+function announceCrossLingual(messageId) {
+  const badge = els.chat.querySelector(`[data-msg-id="${CSS.escape(messageId)}"] .cross-badge`);
+  if (badge) announce(badge.textContent.trim());
+}
+
+function startTicker(messageId) {
+  stopTicker();
+  ui.tickTimer = setInterval(() => {
+    const timer = els.chat.querySelector(`[data-msg-id="${CSS.escape(messageId)}"] [data-role="timer"]`);
+    if (timer) timer.textContent = `${((performance.now() - ui.startedAt) / 1000).toFixed(1)}s`;
+  }, 100);
+}
+
+function stopTicker() {
+  clearInterval(ui.tickTimer);
+  ui.tickTimer = null;
+}
+
+// ---------------------------------------------------------------------------
+// composer
+// ---------------------------------------------------------------------------
+function autosize() {
+  els.input.style.height = "auto";
+  els.input.style.height = `${Math.min(els.input.scrollHeight, 180)}px`;
+}
+
+function updateCharCount() {
+  const length = els.input.value.length;
+  els.charCount.textContent = `${length} / ${MAX_QUESTION_CHARS}`;
+  els.charCount.classList.toggle("is-near", length > MAX_QUESTION_CHARS * 0.85);
+  els.send.disabled = ui.busy || !els.input.value.trim() || length > MAX_QUESTION_CHARS;
+}
+
+// ---------------------------------------------------------------------------
+// settings dialog — every control maps onto a real `AskRequest` field
+// ---------------------------------------------------------------------------
+const UNSUPPORTED = [
+  ["streaming", "Token-by-token streaming", "POST /ask returns one JSON body; no SSE or WebSocket route exists."],
+  ["conversationHistory", "Server-side conversation history", "POST /ask is stateless; conversations live in this browser's localStorage."],
+  ["conversationSearch", "Search across conversations on the server", "The filter in the sidebar runs over local data only."],
+  ["feedback", "Send thumbs up/down to the backend", "No feedback endpoint exists; the vote is stored locally and labelled as such."],
+  ["regenerateEndpoint", "A dedicated regenerate endpoint", "“Regenerate” re-issues the identical POST /ask — a real second request."],
+];
+
+async function openSettings() {
+  els.settingsBody.innerHTML = settingsHTML();
+  openOverlay(els.settingsOverlay, { labelledBy: "settings-title", onClose: () => loadProducts(true) });
+  await loadProducts();
+}
+
+function settingsHTML() {
+  const s = settings();
+  const seg = (name, options, current) => `
+    <div class="segmented" role="group" aria-label="${name}">
+      ${options
+        .map(
+          ([value, label]) =>
+            `<button type="button" data-setting="${name}" data-value="${value}" aria-pressed="${String(current === value)}">${label}</button>`
+        )
+        .join("")}
+    </div>`;
+  const toggle = (key, label, help, checked) => `
+    <label class="switch">
+      <input type="checkbox" data-toggle="${key}" ${checked ? "checked" : ""} />
+      <span class="track" aria-hidden="true"></span>
+      <span class="text"><b>${label}</b><span>${help}</span></span>
+    </label>`;
+
+  return `
+    <div class="settings-grid">
+      <section class="settings-section">
+        <h3>Answer</h3>
+        <div class="field">
+          <div class="field-head"><label for="set-language">Answer language</label>
+            <span class="value">${s.language ? s.language.toUpperCase() : "auto"}</span></div>
+          <select class="select" id="set-language" data-setting-select="language">
+            <option value="">Detect from my question (Bonus 02)</option>
+            <option value="en" ${s.language === "en" ? "selected" : ""}>English</option>
+            <option value="de" ${s.language === "de" ? "selected" : ""}>Deutsch</option>
+            <option value="it" ${s.language === "it" ? "selected" : ""}>Italiano</option>
+          </select>
+          <p class="field-help">Sent as <code>AskRequest.language</code>. “Detect” leaves it unset so the
+            pipeline answers in the language of the question.</p>
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="set-k">Evidence depth</label><span class="value" id="set-k-value">${s.k}</span></div>
+          <input type="range" id="set-k" min="1" max="20" step="1" value="${s.k}" data-setting-range="k" />
+          <p class="field-help">Sent as <code>AskRequest.k</code> (the API accepts 1–50). More passages means
+            more citations and a slower answer.</p>
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="set-product">Restrict to one product</label></div>
+          <select class="select" id="set-product" data-setting-select="product">
+            <option value="">All 13 robots and accessories</option>
+            ${(ui.productCache || [])
+              .map((p) => `<option value="${esc(p)}" ${s.product === p ? "selected" : ""}>${esc(p)}</option>`)
+              .join("")}
+          </select>
+          <p class="field-help" id="set-product-help">Sent as <code>AskRequest.product</code>. The list comes
+            from <code>GET /products</code>.</p>
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="set-provider">Answer generator</label></div>
+          <select class="select" id="set-provider" data-setting-select="provider">
+            <option value="">Server default</option>
+            <option value="gemini" ${s.provider === "gemini" ? "selected" : ""}>Gemini (needs a key on the server)</option>
+            <option value="offline" ${s.provider === "offline" ? "selected" : ""}>Offline formatter (no key)</option>
+          </select>
+          <p class="field-help">Sent as <code>AskRequest.provider</code>. The API key stays on the server —
+            it is never sent to the browser.</p>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Retrieval policy</h3>
+        ${toggle("followUserLanguage", "Follow the question's language", "Off is the naive all-languages baseline (<code>follow_user_language=false</code>).", s.followUserLanguage !== false)}
+        ${toggle("crossLingualFallback", "Allow cross-lingual fallback", "Answer in your language from manuals written in another one (<code>cross_lingual_fallback</code>).", s.crossLingualFallback !== false)}
+      </section>
+
+      <section class="settings-section">
+        <h3>Interface</h3>
+        <div class="field">
+          <div class="field-head"><label>Colour theme</label></div>
+          ${seg("theme", [["light", "Light"], ["dark", "Dark"], ["system", "System"]], s.theme)}
+          <p class="field-help">Stored in this browser. “System” follows your OS setting and updates live.</p>
+        </div>
+        ${toggle("autoScroll", "Scroll to new answers", "Turn off to read a long answer while the next one loads.", s.autoScroll !== false)}
+      </section>
+
+      <section class="settings-section">
+        <h3>Not supported by the API yet</h3>
+        <ul class="unsupported">
+          ${UNSUPPORTED.map(([key, label, why]) => `
+            <li class="unsupported-item">
+              <span class="unsupported-label">${label}</span>
+              <span class="unsupported-why">${why}</span>
+              <code class="unsupported-flag">${CAPABILITIES[key] ? "available" : "no endpoint"}</code>
+            </li>`).join("")}
+        </ul>
+        <p class="field-help">The exact request each one needs is written up in
+          <code>docs/ui-backend-gaps.md</code>. Nothing here is simulated in the UI.</p>
+      </section>
+
+      <section class="settings-section">
+        <h3>Local data</h3>
+        <div class="danger-row">
+          <p class="field-help">Conversations, settings and feedback live in <code>localStorage</code> under
+            <code>telmekon.ui.v1</code> — never on the server.</p>
+          <button class="btn-danger" type="button" data-action="clear-local">Delete all local data</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+async function loadProducts(quiet = false) {
+  if (ui.productCache) {
+    if (!quiet) paintProductOptions();
+    return ui.productCache;
+  }
+  const help = $("set-product-help");
+  try {
+    const payload = await products({ include_params: false, params_per_product: 0, language: "en" });
+    const names = [...new Set((payload?.products || []).map((p) => p?.product).filter(Boolean))].sort();
+    ui.productCache = names;
+    if (!quiet) paintProductOptions();
+  } catch (error) {
+    ui.productCache = null;
+    if (help) help.textContent = `Could not load the catalog (${serializeError(error).message}). The scope stays “all products”.`;
+  }
+  return ui.productCache;
+}
+
+function paintProductOptions() {
+  const select = $("set-product");
+  if (!select || !ui.productCache) return;
+  const current = settings().product;
+  select.innerHTML =
+    `<option value="">All ${ui.productCache.length} products</option>` +
+    ui.productCache.map((p) => `<option value="${esc(p)}" ${current === p ? "selected" : ""}>${esc(p)}</option>`).join("");
+}
+
+function applySetting(key, value) {
+  store.set((state) => updateSettings(state, { [key]: value }));
+  paintSidebar();
+  updateScopeRow();
+  if (key === "theme") {
+    applyTheme();          // without this the switch would only change the setting
+    syncThemeButtons();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// theme
+// ---------------------------------------------------------------------------
+function syncThemeButtons() {
+  const current = settings().theme;
+  for (const button of document.querySelectorAll("[data-theme-set]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeSet === current));
+  }
+}
+
+/** `applyTheme` writes `<html data-theme>` + `color-scheme`; keep it to re-run. */
+const applyTheme = initTheme(
+  () => settings().theme,
+  () => {
+    /* the resolved theme is on <html data-theme>; the CSS does the rest */
+  }
+);
+
+// ---------------------------------------------------------------------------
+// events
+// ---------------------------------------------------------------------------
+function bind() {
+  // -- composer -------------------------------------------------------------
+  els.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitQuestion(els.input.value);
+  });
+  els.input.addEventListener("input", () => {
+    autosize();
+    updateCharCount();
+  });
+  els.input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submitQuestion(els.input.value);
+    }
+  });
+
+  // -- sidebar --------------------------------------------------------------
+  els.newChat.addEventListener("click", () => {
+    store.set(newConversation);
+    paintConversation();
+    paintSidebar();
+    els.input.value = "";
+    autosize();
+    updateCharCount();
+    closeMobileSidebar();
+    els.input.focus();
+  });
+  els.convSearch.addEventListener("input", () => {
+    ui.filter = els.convSearch.value;
+    paintSidebar();
+  });
+  els.openSidebar?.addEventListener("click", () => setSidebar(true));
+  els.toggleSidebar?.addEventListener("click", () => setSidebar(els.app.dataset.sidebar !== "open"));
+  els.sidebarBackdrop.addEventListener("click", () => setSidebar(false));
+
+  for (const button of document.querySelectorAll("[data-theme-set]")) {
+    button.addEventListener("click", () => applySetting("theme", button.dataset.themeSet));
+  }
+
+  // -- topbar ---------------------------------------------------------------
+  els.status.addEventListener("click", () => refreshHealth());
+
+  // -- welcome chips --------------------------------------------------------
+  els.welcome.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-prompt]");
+    if (!chip) return;
+    submitQuestion(chip.dataset.prompt);
+  });
+
+  // -- a figure the server could not deliver --------------------------------
+  // `image_url` is only non-null when api/media.py resolved the file, so this is
+  // the rare case (file moved, disk error, proxy rewrite). Either way the user
+  // gets a sentence, never a broken-image icon.
+  for (const scope of [els.chat, els.citationOverlay, els.lightbox]) {
+    scope.addEventListener(
+      "error",
+      (event) => {
+        const img = event.target;
+        if (img?.tagName !== "IMG") return;
+        const src = img.getAttribute("src") || "";
+        const button = img.closest(".figure-img-btn, .profile-thumb");
+        if (button) {
+          const note = document.createElement("p");
+          note.className = "figure-missing";
+          note.innerHTML = `${icon("alert", { size: 14 })}<span>Figure not available — <code>${esc(src)}</code> did not load.</span>`;
+          button.replaceWith(note);
+        } else {
+          img.replaceWith(Object.assign(document.createElement("p"), {
+            className: "figure-missing",
+            textContent: `Image not available (${src || "no path in the response"}).`,
+          }));
+        }
+        notify("A figure could not be loaded from the API.", "warn");
+      },
+      true                                        // image errors do not bubble
+    );
+  }
+
+  // -- scroll affordance ----------------------------------------------------
+  els.scroller.addEventListener("scroll", () => {
+    const distance = els.scroller.scrollHeight - els.scroller.scrollTop - els.scroller.clientHeight;
+    els.toBottom.hidden = distance < 160 || els.chat.hidden;
+  });
+  els.toBottom.addEventListener("click", () => scrollToBottom(true));
+
+  // -- everything inside the message list (delegated) -----------------------
+  els.chat.addEventListener("click", (event) => {
+    const messageEl = event.target.closest("[data-msg-id]");
+    const messageId = messageEl?.dataset.msgId;
+
+    // One handler for both citation entry points: the `[n]` marker inside the
+    // answer (`.cite`) and the source card under it — both carry `data-ref`.
+    const ref = event.target.closest("[data-ref]");
+    if (ref && messageId) {
+      openCitation(messageId, ref.dataset.ref);
+      return;
+    }
+
+    const figureButton = event.target.closest("[data-figure]");
+    if (figureButton && messageId) {
+      const found = findMessage(messageId);
+      const figure = found?.message?.payload?.figures?.[Number(figureButton.dataset.figure)];
+      openLightbox(figure?.image_url, {
+        caption: figure?.caption || figure?.product || "",
+        labels: figure?.labels || [],
+        alt: figure?.caption || "",
+      });
+      return;
+    }
+
+    const zoom = event.target.closest("[data-lightbox]");
+    if (zoom) {
+      openLightbox(zoom.dataset.lightbox, { caption: zoom.dataset.caption || "" });
+      return;
+    }
+
+    const verify = event.target.closest(".verify-badge");
+    if (verify) {
+      const panel = document.getElementById(verify.getAttribute("aria-controls"));
+      const open = verify.getAttribute("aria-expanded") === "true";
+      verify.setAttribute("aria-expanded", String(!open));
+      if (panel) panel.hidden = open;
+      return;
+    }
+
+    const action = event.target.closest("[data-action]");
+    if (!action || !messageId) return;
+    handleAction(action.dataset.action, messageId, action);
+  });
+
+  // -- sidebar conversation clicks (delegated) ------------------------------
+  els.convList.addEventListener("click", (event) => {
+    const remove = event.target.closest('[data-action="delete-conv"]');
+    if (remove) {
+      removeConversation(remove.dataset.convId);
+      return;
+    }
+    const open = event.target.closest("[data-conv]");
+    if (!open) return;
+    store.set((state) => selectConversation(state, open.dataset.conv));
+    paintConversation();
+    paintSidebar();
+    closeMobileSidebar();
+  });
+
+  // -- overlays -------------------------------------------------------------
+  for (const overlay of [els.citationOverlay, els.lightbox, els.settingsOverlay]) {
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay || event.target.classList.contains("overlay-backdrop") || event.target.closest("[data-close]")) {
+        closeOverlay(overlay);
+      }
+    });
+  }
+  els.drawerBackdrop.addEventListener("click", closeDrawer);
+  els.drawer.addEventListener("click", (event) => {
+    if (event.target.closest("[data-close]")) closeDrawer();
+    const tab = event.target.closest("[data-tab]");
+    if (tab) {
+      ui.drawer.tab = tab.dataset.tab;
+      paintDrawer();
+    }
+    if (event.target.closest("[data-action='copy-json']")) copyDrawerJson();
+  });
+  els.drawerRerun.addEventListener("click", rerunDrawer);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (ui.overlayStack.length) {
+        if (ui.overlayStack[ui.overlayStack.length - 1].panel === els.drawer) closeDrawer();
+        else closeTopOverlay();
+        return;
+      }
+      if (isMobile() && els.app.dataset.sidebar === "open") setSidebar(false);
+      return;
+    }
+    if (event.key === "Tab" && ui.overlayStack.length) {
+      trapFocus(ui.overlayStack[ui.overlayStack.length - 1].panel, event);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      els.input.focus();
+      els.input.select();
+    }
+  });
+
+  // -- settings -------------------------------------------------------------
+  els.settingsBody.addEventListener("click", (event) => {
+    const seg = event.target.closest("[data-setting]");
+    if (seg) {
+      applySetting(seg.dataset.setting, seg.dataset.value);
+      for (const sibling of seg.parentElement.querySelectorAll("[data-setting]")) {
+        sibling.setAttribute("aria-pressed", String(sibling === seg));
+      }
+      return;
+    }
+    if (event.target.closest('[data-action="clear-local"]')) clearLocalData();
+  });
+  els.settingsBody.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-setting-select]");
+    if (select) {
+      applySetting(select.dataset.settingSelect, select.value);
+      // update the value chip only — re-rendering the dialog would drop focus
+      const chip = select.closest(".field")?.querySelector(".value");
+      if (chip) chip.textContent = select.value ? select.value.toUpperCase() : "auto";
+      return;
+    }
+    const toggle = event.target.closest("[data-toggle]");
+    if (toggle) applySetting(toggle.dataset.toggle, toggle.checked);
+  });
+  els.settingsBody.addEventListener("input", (event) => {
+    const range = event.target.closest("[data-setting-range]");
+    if (!range) return;
+    $("set-k-value").textContent = range.value;
+    applySetting(range.dataset.settingRange, Number(range.value));
+  });
+
+  for (const id of ["open-settings", "open-settings-top"]) {
+    $(id)?.addEventListener("click", openSettings);
+  }
+
+  // -- scope chips ----------------------------------------------------------
+  els.scopeRow.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-action="clear-scope"]');
+    if (!button) return;
+    const key = button.dataset.key;
+    const reset = { product: "", language: "", provider: "" };
+    if (key in reset) applySetting(key, reset[key]);
+    else if (key === "crossLingualFallback") applySetting(key, true);
+    else if (key === "followUserLanguage") applySetting(key, true);
+  });
+
+  // -- health refresh -------------------------------------------------------
+  window.addEventListener("focus", () => {
+    if (!document.hidden) refreshHealth({ quiet: true });
+  });
+  ui.healthTimer = setInterval(() => refreshHealth({ quiet: true }), HEALTH_REFRESH_MS);
+}
+
+async function handleAction(action, messageId, button) {
+  const found = findMessage(messageId);
+  if (!found) return;
+  const message = found.message;
+
+  switch (action) {
+    case "copy": {
+      const text = plainText(message.payload?.answer || "");
+      if (!text) {
+        notify("There is no answer text to copy.", "warn");
+        return;
+      }
+      const ok = await copyText(text);
+      notify(ok ? `Answer copied (${text.length} characters).` : "Copying is blocked in this browser — select the text instead.", ok ? "info" : "error");
+      return;
+    }
+    case "regenerate": {
+      if (ui.busy) {
+        notify("Wait for the current question to finish.", "warn");
+        return;
+      }
+      button.disabled = true;
+      // A real second POST /ask — the API has no regenerate endpoint, and the
+      // button's tooltip says exactly that.
+      await submitQuestion(message.question, { regenerateOf: messageId });
+      return;
+    }
+    case "feedback": {
+      const value = message.feedback === button.dataset.value ? null : button.dataset.value;
+      store.set((state) => setFeedback(state, found.conversation.id, messageId, value));
+      paintMessage({ ...message, feedback: value });
+      if (value) {
+        notify(
+          value === "up"
+            ? "Thanks — saved in this browser only (the API has no feedback endpoint)."
+            : "Noted — saved in this browser only (the API has no feedback endpoint).",
+          "info"
+        );
+      }
+      return;
+    }
+    case "raw":
+      openDrawer(messageId, "search");
+      return;
+    case "retry":
+      // Same question, same message slot: the failed card is replaced, not stacked.
+      await submitQuestion(button.dataset.question || message.question, { regenerateOf: messageId });
+      return;
+    default:
+      return;
+  }
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+async function copyDrawerJson() {
+  const text = els.drawerJson.textContent || "";
+  const ok = await copyText(text);
+  notify(ok ? "JSON copied to the clipboard." : "Copying is blocked in this browser.", ok ? "info" : "error");
+}
+
+function removeConversation(id) {
+  const state = store.state;
+  const target = state.conversations.find((c) => c.id === id);
+  if (!target) return;
+  ui.deletedSnapshot = state;
+  store.set((next) => deleteConversation(next, id));
+  paintConversation();
+  paintSidebar();
+  notify(`Deleted “${titleFrom(target.title, 32)}” from this browser.`, "info", {
+    label: "Undo",
+    onClick: () => {
+      if (!ui.deletedSnapshot) return;
+      store.set(() => ui.deletedSnapshot);
+      ui.deletedSnapshot = null;
+      paintConversation();
+      paintSidebar();
+      notify("Conversation restored.");
+    },
+  });
+}
+
+function clearLocalData() {
+  store.reset();
+  ui.productCache = null;
+  closeOverlay(els.settingsOverlay);
+  paintConversation();
+  paintSidebar();
+  updateScopeRow();
+  notify("All locally saved conversations and settings were deleted.", "info");
+}
+
+// ---------------------------------------------------------------------------
+// responsive sidebar
+// ---------------------------------------------------------------------------
+const isMobile = () => window.matchMedia(MOBILE_QUERY).matches;
+
+function setSidebar(open) {
+  els.app.dataset.sidebar = open ? "open" : "collapsed";
+  els.sidebarBackdrop.hidden = !(open && isMobile());
+  els.openSidebar?.setAttribute("aria-expanded", String(open));
+  if (open && isMobile()) els.sidebar.focus?.();
+}
+
+function closeMobileSidebar() {
+  if (isMobile()) setSidebar(false);
+}
+
+// ---------------------------------------------------------------------------
+// boot
+// ---------------------------------------------------------------------------
+/**
+ * What this assistant really does, on the welcome screen. Built from
+ * `CAPABILITIES` in api.js so the list cannot drift from what the API offers —
+ * an absent feature is stated, never imitated.
+ */
+function paintCapabilities() {
+  const pills = [
+    ["check", "Grounded answers"],
+    ["quote", "Every claim cited"],
+    ["image", "Manual figures + Labels"],
+    ["code", "Raw /search drawer"],
+    ["globe", "DE · EN · IT"],
+  ];
+  if (!CAPABILITIES.streaming) pills.push(["info", "No streaming — one JSON response"]);
+  if (!CAPABILITIES.conversationHistory) pills.push(["clock", "History kept in this browser"]);
+  els.capabilities.innerHTML = pills
+    .map(([name, label]) => `<span class="cap-pill">${icon(name, { size: 13 })}${esc(label)}</span>`)
+    .join("");
+}
+/**
+ * Icons are inline SVG injected from `icons.js`, so the served HTML contains no
+ * external URLs at all (no icon font, no CDN, no sprite sheet to fetch).
+ */
+function paintIcons() {
+  for (const host of document.querySelectorAll("[data-icon]")) {
+    host.innerHTML = icon(host.dataset.icon, {
+      size: Number(host.dataset.size || 16),
+      label: host.dataset.label || "",
+    });
+  }
+  const brand = $("brand-mark");
+  if (brand) brand.outerHTML = brandMark(19).replace('class="brand-mark"', 'class="brand-mark" id="brand-mark"');
+}
+
+function boot() {
+  paintIcons();
+
+  paintCapabilities();
+  setSidebar(!isMobile());
+  syncThemeButtons();
+  paintConversation();
+  paintSidebar();
+  updateCharCount();
+  autosize();
+  bind();
+  refreshHealth({ quiet: true });
+
+  window.matchMedia(MOBILE_QUERY).addEventListener("change", () => setSidebar(!isMobile()));
+
+  // A restored conversation re-renders what the API returned before; its raw
+  // /search pane stays empty until the user re-runs it (nothing is invented).
+  const restored = conversation();
+  if (restored?.messages?.length) {
+    notify(`Restored ${restored.messages.length} message(s) from this browser.`, "info");
+  }
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+else boot();
+
+/* Exported for the browser console and for `ui/tests/app.contract.test.js`. */
+export const __internals = { submitQuestion, openCitation, openLightbox, serializeError, messageHTML, validate };

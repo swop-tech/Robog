@@ -5,3 +5,4 @@ venv/
 build/
 .env
 .DS_Store
+node_modules/

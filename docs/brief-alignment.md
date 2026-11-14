@@ -37,7 +37,7 @@ wikis are another, own ideas allowed — *pick it, build it, defend it.*
 |---|---|---|---|
 | Grounded, faithful answers (required) | Every answer is post-checked (G5): each factual sentence must cite a retrieved chunk, each number/unit must occur in the evidence, quotes must be verbatim; bad claims are repaired or dropped | 28-question benchmark: 100% grounded, 100% claims cited, 0 invented numbers | **met** |
 | Quality of the answers (judged) | Offline formatter composes from evidence: exact parameter rows, profile-card comparisons, figure legends | accurate on lookups/comparisons; **terse on procedures, no persona register** — see §4.1 | **partly met** |
-| Ease of use (judged) | Zero-build web chat at `GET /`: starter chips, inline citations, rendered figures, verification badge, raw-`/search` drawer | works; **single-turn only** — see §4.3 | **partly met** |
+| Ease of use (judged) | Zero-build assistant UI at `GET /`: starter chips, inline citations, spec + product cards, rendered figures, verification badge, raw-`/search` drawer, light/dark, saved conversations, settings | works desktop + mobile; **follow-up turns still need the backend** — see §4.3 | **partly met** |
 | Architecture you can defend (required) | Keyword hybrid (BM25 + parameter index + profile cards + figure route + language policy) with an optional dense layer (Chroma + Gemini/e5), RRF-fused | dense layer is **optional, unbuilt and unmeasured**; docs described a template pipeline that was never implemented — corrected in `gemini_chromadb_explanation.md` §2 | **defensible only with §4.4 closed** |
 | Working interface (required) | FastAPI + web chat, `python -m api` | 295 tests pass; `/health`, `/`, `/search`, `/ask`, `/products`, `/media` | **met** |
 | Bonus 01 — plug-and-play retrieval | `GET /search` returns `SearchResult.to_dict()` unchanged; `api/client.py` is a second client | 63 API tests | **met** |
@@ -92,9 +92,14 @@ would close this. Out-of-corpus questions (error codes, price, warranty terms) s
 so explicitly — the price question already does.
 
 ### 4.3 It is not a conversation (judged: *ease of use*)
-`ui/app.js` posts `{ question }` and `/ask` is stateless: no history, no "and the Pro
-version?", no "in German please". The brief's interface requirement is met, but a chat that
-forgets every turn reads as a search box.
+`/ask` is stateless and `AskRequest` has no field for prior turns, so each question is still
+answered on its own: no "and the Pro version?", no "in German please". The UI rewrite closed
+the part that is closable client-side — conversations are kept, titled, filtered and restored from
+`localStorage` (25 max, oldest dropped when the quota is hit), the sidebar lists them, and the
+answer language / evidence depth / product scope / language policy are switchable per session — and it says plainly that this history lives in the browser only. What is *not* fixed
+is the follow-up turn, which needs the backend: `docs/ui-backend-gaps.md` §2 specifies the
+`/conversations` routes and §1 the streaming variant, and `ui/api.js::CAPABILITIES` keeps the
+UI from pretending either exists.
 
 ### 4.4 The dense layer is unmeasured (required: *defend your architecture*)
 `build/chroma` is not in the repo and cannot be built without a Gemini key or a
