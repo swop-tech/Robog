@@ -1,7 +1,7 @@
 # Gemini Embedding 2 + ChromaDB — the production run, explained honestly
 
-> Companion to `vector_database_explanation.md` (concepts) and `judge_demo_script.md`
-> (presenting). This file records **exactly what has and has not been executed**
+> Companion to `vector_database_explanation.md` (concepts).
+> This file records **exactly what has and has not been executed**
 > for the production vector database, and the precise configuration to use.
 > Status when written: **the production embedding run has NOT been executed yet.**
 

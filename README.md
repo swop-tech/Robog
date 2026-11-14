@@ -15,7 +15,6 @@ source-grounded answers for both technicians and non-technical users.
 - 💬 Answer composer + evidence validation (G5, Bonus 02): [`docs/answering.md`](docs/answering.md)
 - 🔌 FastAPI backend (`/search`, `/ask`, `/products`, `/media`): [`docs/api.md`](docs/api.md)
 - 🖥️ Web chat UI (`ui/`, served at `GET /`): [`ui/README.md`](ui/README.md)
-- 🧭 Judge briefing + demo script (implemented vs pending): [`docs/judge_explanation.md`](docs/judge_explanation.md), [`docs/judge_demo_script.md`](docs/judge_demo_script.md)
 - 🧠 Vector database from zero + the Gemini → Chroma run: [`docs/vector_database_explanation.md`](docs/vector_database_explanation.md), [`docs/gemini_chromadb_explanation.md`](docs/gemini_chromadb_explanation.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
