@@ -153,6 +153,88 @@ def _card_min_width_cm(record: dict) -> float | None:
     return float(m.group(1).replace(",", "."))
 
 
+_DELIVERY_CUES: frozenset[str] = frozenset(
+    """
+    deliver delivery delivering deliveries liefern lieferung zustellung consegna consegnare
+    """.split()
+)
+
+_DELIVERY_SCENARIO_CUES: frozenset[str] = (
+    _FOOD_RESTAURANT_CUES | _HOTEL_BUILDING_CUES | _ELEVATOR_ENCLOSED_CUES
+    | _RECEPTION_SCREEN_CUES | _BUSSING_CUES | _DELIVERY_CUES
+)
+
+_SCENARIO_CUE_SETS: tuple[frozenset[str], ...] = (
+    _CLEANING_CUES,
+    _INDUSTRIAL_CUES,
+    _FOOD_RESTAURANT_CUES,
+    _HOTEL_BUILDING_CUES,
+    _ELEVATOR_ENCLOSED_CUES,
+    _RECEPTION_SCREEN_CUES,
+    _NARROW_CUES,
+    _BUSSING_CUES,
+    _RETAIL_SUPERMARKET_CUES,
+    _DELIVERY_CUES,
+)
+
+
+def has_numeric_constraint(query: str) -> bool:
+    """True when the question states a load in kg or a passage width in cm."""
+    return bool(_KG_QUERY_RE.search(query) or _CM_QUERY_RE.search(query))
+
+
+def has_scenario_signal(query: str) -> bool:
+    """True when an advisory question names a use case, environment or number.
+
+    "Which robot is best?" names none of these, so every card scores the same
+    and any ranking would be arbitrary. Such a question must be answered by
+    asking for the scenario, not by listing 13 robots as if they were a choice.
+    """
+    if _KG_QUERY_RE.search(query) or _CM_QUERY_RE.search(query):
+        return True
+    tokens = set(tokenize(query))
+    return any(tokens & cues for cues in _SCENARIO_CUE_SETS)
+
+
+def _hard_filter(hits: list["ProfileHit"], query: str) -> list["ProfileHit"]:
+    """Drop cards that cannot satisfy what the question states as a fact.
+
+    * a load in kg ("carry 300 kg"): the card's payload must reach it;
+    * a passage in cm ("a 60 cm aisle"): the card must fit through it;
+    * a use case (cleaning / industrial / delivery): the card must be that kind
+      of robot. Without this, "300 kg in a factory" returned a sweeper.
+    Soft preferences ("narrow", "elevator") are left to the scoring.
+    """
+    tokens = set(tokenize(query))
+    kg_matches = [float(m.group(1).replace(",", ".")) for m in _KG_QUERY_RE.finditer(query)]
+    cm_matches = [float(m.group(1).replace(",", ".")) for m in _CM_QUERY_RE.finditer(query)]
+    need_kg = max(kg_matches) if kg_matches else None
+    need_cm = min(cm_matches) if cm_matches else None
+
+    def keep(hit: "ProfileHit") -> bool:
+        record = hit.record
+        category = record.get("category", "")
+        envs = set(record.get("environments") or ())
+        if need_kg is not None:
+            cap = _card_max_kg(record)
+            if cap is None or cap < need_kg:
+                return False
+        if need_cm is not None:
+            width = _card_min_width_cm(record)
+            if width is None or width > need_cm:
+                return False
+        if tokens & _CLEANING_CUES:
+            return category == "cleaning"
+        heavy = (need_kg or 0) >= 80.0 or bool(tokens & _INDUSTRIAL_CUES)
+        if heavy:
+            return category == "industrial_delivery" or bool(envs & {"heavy_load", "industrial"})
+        if tokens & _DELIVERY_SCENARIO_CUES:
+            return category in ("delivery", "industrial_delivery")
+        return True
+
+    return [hit for hit in hits if keep(hit)]
+
+
 @dataclass
 class ProfileHit:
     record: dict
@@ -545,4 +627,6 @@ class ProfileIndex:
         if combined and not wanted:
             cutoff = max(0.5, combined[0].score * 0.15)
             combined = [hit for hit in combined if hit.score >= cutoff]
+        if not wanted:
+            combined = _hard_filter(combined, query)
         return combined[:k]

@@ -41,6 +41,7 @@ from typing import Any
 from retrieve.engine import SearchEngine, SearchResult
 
 from .evidence import Evidence
+from retrieve.profiles import has_numeric_constraint
 from .formatter import Draft, format_answer
 from .llm import Generator, build_generator, describe_provider
 from .prompt import build_prompt, language_instruction
@@ -170,6 +171,39 @@ class AnswerComposer:
             )
             empty = Evidence(language=language, notes=list(result.notes))
             notes.append("asked back: question named neither a robot nor a parameter")
+            return self._finish(question, draft, empty, result, language, notes, started)
+
+        # A stated load or passage that no card satisfies: say so, do not
+        # substitute a robot that fails the requirement.
+        if (
+            result.route == "advisory"
+            and not result.products
+            and not result.profiles
+            and not result.needs_scenario
+            and has_numeric_constraint(question)
+        ):
+            draft = Draft(
+                text=text("no_match_constraint", language),
+                provider="offline",
+                language=language,
+                notes=["advisory: no robot satisfies the stated load or width"],
+            )
+            empty = Evidence(language=language, notes=list(result.notes))
+            notes.append("asked back: no robot satisfies the stated constraint")
+            return self._finish(question, draft, empty, result, language, notes, started)
+
+        # "Which robot is best?" names no use case, environment or number. Any
+        # ranking would be arbitrary, so ask for the scenario instead of listing
+        # all 13 robots as if they were a recommendation.
+        if result.route == "advisory" and result.needs_scenario:
+            draft = Draft(
+                text=text("needs_scenario", language),
+                provider="offline",
+                language=language,
+                notes=["under-specified advisory: no use case named"],
+            )
+            empty = Evidence(language=language, notes=list(result.notes))
+            notes.append("asked back: advisory question named no use case")
             return self._finish(question, draft, empty, result, language, notes, started)
 
         if not evidence.refs:

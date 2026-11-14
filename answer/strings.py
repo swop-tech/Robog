@@ -169,6 +169,50 @@ STRINGS: dict[str, dict[str, str]] = {
             "(carico, batteria, velocità, capacità del serbatoio, dimensioni) e lo citerò con la pagina."
         ),
     },
+    "compare_passage": {
+        "en": "Narrowest passage among these: {width} — {names} {refs}.",
+        "de": "Schmalste Durchgangsbreite unter diesen: {width} — {names} {refs}.",
+        "it": "Passaggio più stretto tra questi: {width} — {names} {refs}.",
+    },
+    "no_match_constraint": {
+        "en": (
+            "None of the robots in the manuals meets that requirement, so I will not name one. "
+            "Check the value, or name a robot and I will quote its exact specification."
+        ),
+        "de": (
+            "Kein Roboter in den Handbüchern erfüllt diese Anforderung, deshalb nenne ich keinen. "
+            "Prüfen Sie den Wert oder nennen Sie einen Roboter, dann zitiere ich seine genaue Spezifikation."
+        ),
+        "it": (
+            "Nessun robot dei manuali soddisfa questo requisito, quindi non ne indico nessuno. "
+            "Controlla il valore oppure indica un robot e citerò la sua specifica esatta."
+        ),
+    },
+    "needs_scenario": {
+        "en": (
+            "Which robot is best depends on where it will work, and I do not want to guess. "
+            "Tell me the use case, for example: food delivery in a restaurant (BellaBot, KettyBot, "
+            "PuduBot 2), delivery through an elevator to hotel rooms (FlashBot), cleaning a "
+            "supermarket or floor (cleaning robots), heavy transport in a factory (PUDU T300), "
+            "or a specific load in kg or passage width in cm. I will then compare the matching robots "
+            "with their specs and page references."
+        ),
+        "de": (
+            "Welcher Roboter am besten passt, hängt vom Einsatzort ab – ich möchte nicht raten. "
+            "Nennen Sie den Einsatz, zum Beispiel: Speisenlieferung im Restaurant (BellaBot, KettyBot, "
+            "PuduBot 2), Lieferung per Aufzug in Hotelzimmer (FlashBot), Reinigung eines Supermarkts "
+            "oder von Böden (Reinigungsroboter), Schwerlasttransport in der Fabrik (PUDU T300) "
+            "oder eine bestimmte Last in kg bzw. Durchgangsbreite in cm. Dann vergleiche ich die "
+            "passenden Roboter mit Daten und Seitenangaben."
+        ),
+        "it": (
+            "Quale robot sia il migliore dipende da dove lavorerà, e non voglio tirare a indovinare. "
+            "Dimmi l'uso, per esempio: consegna di cibo in ristorante (BellaBot, KettyBot, PuduBot 2), "
+            "consegna con ascensore in hotel (FlashBot), pulizia di un supermercato o di pavimenti "
+            "(robot per la pulizia), trasporto pesante in fabbrica (PUDU T300), oppure un carico preciso "
+            "in kg o una larghezza di passaggio in cm. Poi confronto i robot adatti con dati e pagine di riferimento."
+        ),
+    },
     "provider_offline_note": {
         "en": "Answer composed by the offline formatter (no LLM call).",
         "de": "Antwort vom Offline-Formatierer erstellt (kein LLM-Aufruf).",

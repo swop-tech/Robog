@@ -39,7 +39,7 @@ from .bm25 import BM25
 from .lang import LANGUAGES, LanguagePlan, detect_language, plan
 from .lexicon import concepts_for, expand_tokens
 from .params import ParamHit, ParamIndex
-from .profiles import ADVISORY_FRAMING_WORDS, ProfileHit, ProfileIndex
+from .profiles import ADVISORY_FRAMING_WORDS, ProfileHit, ProfileIndex, has_scenario_signal
 from .router import Route, route as classify
 from .text import fold, tokenize
 from .vector import ChromaRetriever, DenseHit, VectorStoreUnavailable
@@ -171,6 +171,9 @@ class SearchResult:
     tiers_used: list[str] = field(default_factory=list)
     products: list[str] = field(default_factory=list)
     coverage: float = 0.0  # share of the question's content words found in top hits
+    # An advisory question with no use case, environment or number ("which robot
+    # is best?"): there is nothing to rank on, so the caller must ask for one.
+    needs_scenario: bool = False
 
     @property
     def confidence(self) -> str:
@@ -213,6 +216,7 @@ class SearchResult:
             "tiers_used": self.tiers_used,
             "confidence": self.confidence,
             "coverage": round(self.coverage, 3),
+            "needs_scenario": self.needs_scenario,
             "notes": self.notes,
             "params": [
                 {"parameter": p.parameter, "value": p.value, "citation": p.citation, **p.record}
@@ -896,6 +900,27 @@ class SearchEngine:
 
         # -- structured product profile cards (gap G2) ----------------------
         profiles: list[ProfileHit] = []
+        if (
+            routed.is_advisory
+            and not explicit_accessory
+            and not products
+            and not has_scenario_signal(query)
+        ):
+            # "Which robot is best?" -- every card would score identically, so a
+            # ranking here is a guess. Return no robots; the composer asks back.
+            notes.append("advisory question names no scenario -- asking which one")
+            return SearchResult(
+                query=query,
+                language=detected,
+                route=routed.kind,
+                route_reason=routed.reason,
+                policy=policy.describe(),
+                notes=notes,
+                tiers_used=tiers_used,
+                products=products,
+                coverage=0.0,
+                needs_scenario=True,
+            )
         if routed.is_advisory and not explicit_accessory and self.profiles.records:
             profiles = self.profiles.search(
                 query,
