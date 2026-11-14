@@ -143,6 +143,21 @@ class ChatUiTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200, path)
             self.assertIn(ctype, response.headers["content-type"], path)
 
+    def test_asset_types_do_not_depend_on_the_os_registry(self) -> None:
+        """Windows often maps ``.js`` to ``text/plain``; a module script then never runs."""
+        import importlib
+        import mimetypes
+
+        import api.app
+
+        mimetypes.add_type("text/plain", ".js")  # what a Windows registry can say
+        mimetypes.add_type("text/plain", ".css")
+        importlib.reload(api.app)  # importing the app pins the types again
+        js = self.client.get("/ui/app.js")
+        css = self.client.get("/ui/styles.css")
+        self.assertIn("javascript", js.headers["content-type"])
+        self.assertIn("text/css", css.headers["content-type"])
+
     def test_app_js_calls_the_service_endpoints(self) -> None:
         js = self.client.get("/ui/app.js").text
         for endpoint in ('"/ask"', "/search", "/health"):
