@@ -125,12 +125,14 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 | A large troubleshooting table can outrank the focused procedure on procedural questions | acceptable while the composer reads the top-k; a dense retriever helps here too |
 | `confidence` is recall-based, not calibrated | the answer composer's evidence validation (G5) is now the hard gate; `confidence` is a soft hint |
 | Lexicon covers parameters and core scenarios, not every procedure | grows from eval misses; keep it small and explainable |
-| Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs, but nothing serves or renders the PNG over HTTP yet | `GET /media/{doc_id}/{filename}` in the FastAPI step |
+| Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs | served over HTTP by `GET /media/{doc_id}/{filename}` ([`api.md`](api.md)); UI rendering is what remains |
 
 ## Next
 
 ~~Answer composer with citation/numeric/quote verification (G5)~~ — done, see
 [`answering.md`](answering.md): `answer/AnswerComposer` consumes `SearchResult` unchanged, so
-`result.to_dict()` stays the `/search` contract. Next: FastAPI (`/search`, `/ask`, `/products`,
-`/media/...`) → chat UI. Dense retrieval is optional behind `SearchEngine`; it still needs
-end-to-end validation with a real embedding model and a larger, relevance-judged benchmark.
+`result.to_dict()` stays the `/search` contract — the FastAPI backend ([`api.md`](api.md)) now
+serves it unchanged at `GET /search`, adding only an absolute `image_url` per figure hit. Next: the
+chat UI. Dense retrieval is optional behind `SearchEngine` (attach it to the API with
+`ROBOG_API_VECTOR=auto`); it still needs end-to-end validation with a real embedding model and a
+larger, relevance-judged benchmark.

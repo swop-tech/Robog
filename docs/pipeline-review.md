@@ -184,15 +184,16 @@ Checked against the repo at this commit (`ingest/`, `retrieve/`, `eval/`, `docs/
 | Dense retrieval (G3/G1 full) | ⚠️ code only | `ingest/embed_index.py` exists; never run/validated end-to-end |
 | Product profile cards (G2 advisory) | ✅ done | `ingest/profiles.py` → `build/profiles.jsonl` (38 cards across 13 robots) + `retrieve/profiles.py` (`ProfileIndex`, `SearchResult.profiles`) |
 | Picture intent & language-aware figure selection (G6 retrieval) | ✅ done | `route="figure"` in EN/DE/IT, overview diagram ranker, `Hit.labels`, EN-first cross-lingual fallback |
-| Backend API (G4 → Bonus 01) | ❌ missing | no FastAPI yet; `SearchResult.to_dict()` (with `hits`, `params`, `profiles`) is ready |
+| Backend API (G4 → Bonus 01) | ✅ done | `api/` — FastAPI `GET /search` (`to_dict()` unchanged + `image_url`), `POST /ask`, `GET /products`, `GET /health`, `/docs`; 57 tests + a stdlib second client → [`api.md`](api.md) |
 | Answer composer + evidence validation (G5) | ✅ done | `answer/` — `gemini-2.5-flash` + offline formatter, three post-checks (citation/numeric/quote) with repair; 28-question answer benchmark: 100% grounded, 0 invented numbers, 100% answer-language match, 100% cross-lingual disclosure → [`answering.md`](answering.md) |
 | Multilingual answers (Bonus 02, answering half) | ✅ done | answer language = question language, evidence languages disclosed, values quoted from EN/DE sources for Italian questions → [`answering.md`](answering.md) |
-| Chat UI + HTTP media serving (G6 display) | ❌ missing | `Answer.figures` carries `image` + `caption` + `labels`; `GET /media/...` and UI rendering still to build |
+| HTTP media serving (G6 display) | ✅ done | `GET /media/{doc_id}/{filename}` serves all 476 PNGs, path-traversal safe + cached; hits/citations/figures carry `image_url` |
+| Chat UI | ❌ missing | the last open item: streaming answers, clickable citations, inline figures |
 
-**Net:** data, retrieval and answering (composer + validation) are finished and measured;
-the API and the UI are what remains. The scorecard in §7 still describes the target, not the current state.
-Images are indexed and returned as metadata, but **not yet viewable** — the gap is broken down
-in §9a and is deliberately deferred, not forgotten.
+**Net:** data, retrieval, answering (composer + validation) and the API — including HTTP media
+serving — are finished and measured; **the chat UI is what remains**. Images are indexed, returned
+with an absolute `image_url` and served by `GET /media/...`; the §9a gap is closed except for UI
+rendering.
 
 ## 9. Next steps (in order)
 
@@ -204,9 +205,10 @@ in §9a and is deliberately deferred, not forgotten.
 4. ~~**Product profile cards (G2) + picture intent (`figure` route, G6 retrieval)**~~ ✅
    38 localized robot cards in `build/profiles.jsonl`, `ProfileIndex` fleet comparison, and
    multilingual `figure` routing (`100%` Pass@8, `0.95` MRR on 28-question eval).
-5. **FastAPI backend** (G4 → Bonus 01): `GET /search`, `POST /ask`, `GET /products` over
-   `SearchEngine`; `/search` returns `to_dict()` unchanged. Second client (curl/Telegram) to prove
-   plug-and-play. **Adds the HTTP media endpoint (`GET /media/{doc_id}/{filename}`) from §9a.**
+5. ~~**FastAPI backend** (G4 → Bonus 01)~~ ✅ `api/`: `GET /search`, `POST /ask`, `GET /products`
+   over `SearchEngine`; `/search` returns `to_dict()` unchanged plus `image_url`. Second client
+   (`api/client.py`, stdlib only) proves plug-and-play. Includes the HTTP media endpoint
+   (`GET /media/{doc_id}/{filename}`) from §9a → [`api.md`](api.md).
 6. ~~**Answer composer + evidence validation** (G5)~~ ✅ `answer/` — pluggable Gemini/offline
    generation, citation + numeric + quote checks with repair and one regeneration, localized
    answer scaffolding (EN/DE/IT), and an answer-level benchmark over the 28 questions.
@@ -219,14 +221,16 @@ in §9a and is deliberately deferred, not forgotten.
 
 Parked on purpose (decided after the review), **must not be dropped** — the brief explicitly asks
 for "answer + citation + relevant image", and today we only have the retrieval side of it.
-State of play at `main` (`124e29d`): 476 figure chunks, 476/476 `image` paths resolve on disk,
-hits carry `"image": "images/en-p003R-fig01.png"` — and nothing can display or request them.
+State of play when this was written (`main`, `124e29d`): 476 figure chunks, 476/476 `image` paths
+resolve on disk, hits carry `"image": "images/en-p003R-fig01.png"` — and nothing could display or
+request them. That is now fixed (see the status at the end of this section).
 
 **Three pieces, none of them big (belongs with step 4, the API):**
 
-1. **Media endpoint (pending with FastAPI)** — `GET /media/{doc_id}/{filename}` serving only `data/**/images/*.png`
-   (path-traversal safe, `Cache-Control: public, max-age=…`). Without it the browser cannot reach
-   the PNGs at all; hits should return `image_url` (absolute) next to the bare `image` path.
+1. ~~**Media endpoint**~~ ✅ Implemented in `api/media.py` + `api/app.py`:
+   `GET /media/{doc_id}/{filename}` serves only `data/**/images/*.png` (four traversal checks,
+   symlink-safe, `Cache-Control: public, max-age=86400`), and `/search`, `/ask` and `/products`
+   return an absolute `image_url` next to the bare `image` path — see [`api.md`](api.md).
 2. ~~**Picture intent (`figure` route)**~~ ✅ Implemented in `retrieve/router.py` + `retrieve/engine.py`:
    `"Show me a picture of the BellaBot"`, `"Zeig mir ein Bild vom FlashBot"`, `"Mostrami una foto..."`,
    and `"What does X look like?"` route to `figure`, filter `chunk_type="figure"`, rank `§2.2/§2.3`
@@ -242,3 +246,8 @@ figure chunk stays the retrieval unit.
 **Definition of done:** `/search` returns `image_url` for figure hits, the picture route answers
 "show me a picture of the BellaBot" with ≥1 image, a DE/IT question gets the matching-language
 figure, and one eval question (e.g. `L09`/`L10`) asserts an image path exists in the top hit.
+
+**Status: met** — `tests/test_api.py::CorpusApiTest` asserts all of it over HTTP on the real corpus:
+every figure hit has an `image_url` that answers `200 image/png`, `"Zeig mir ein Bild vom BellaBot"`
+returns a `de-…` figure and `"Mostrami una foto del BellaBot"` an `it-…` one, and Italian + FlashBot
+(no IT manual) falls back to `en-…` with `cross_lingual: true`. Only UI rendering is left.

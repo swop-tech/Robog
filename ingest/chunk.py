@@ -429,6 +429,16 @@ def translation_group(product: str, meta: dict) -> str:
     return f"{_slug(product)}|{_slug(str(anchor))}|{kind}"
 
 
+def doc_id_for(manual_dir: str | Path, language: str) -> str:
+    """The document id of one language file: folder slug + language.
+
+    Public because the API's media endpoint has to rebuild a chunk's ``doc_id``
+    from a path on disk (``api/media.py``); keeping the rule in one place is
+    what stops the two from drifting apart.
+    """
+    return f"{_slug(Path(manual_dir).name)}-{str(language or '').strip().lower()}"
+
+
 def doc_type_for(path: Path) -> str:
     """``manuals/`` folders hold robots, ``accessories/`` folders accessories."""
     parts = [p.lower() for p in path.parts]
@@ -442,7 +452,7 @@ def doc_type_for(path: Path) -> str:
 def chunk_manual(manual: Manual, max_chars: int = DEFAULT_MAX_CHARS) -> list[Chunk]:
     """Split one cleaned manual into retrieval chunks with source metadata."""
     blocks = _Parser(manual.body).parse()
-    doc_id = _slug(manual.path.parent.name) + "-" + manual.language
+    doc_id = doc_id_for(manual.path.parent, manual.language)
     base_meta = {
         "doc_id": doc_id,
         "source_file": str(manual.path),
