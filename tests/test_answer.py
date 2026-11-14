@@ -486,9 +486,9 @@ class GeneratorTests(unittest.TestCase):
         generator = GeminiGenerator(client=client)
         draft = generator.draft("prompt", make_evidence(), language="en")
         self.assertEqual(draft.provider, "gemini")
-        self.assertEqual(draft.model, "gemini-2.5-flash")
+        self.assertEqual(draft.model, "gemini-3.8-flash")
         self.assertIn("20 kg", draft.text)
-        self.assertEqual(client.calls[0]["model"], "gemini-2.5-flash")
+        self.assertEqual(client.calls[0]["model"], "gemini-3.8-flash")
 
     def test_gemini_generator_falls_back_on_error(self):
         generator = GeminiGenerator(client=_FailingClient(), attempts=2, sleep_fn=lambda _s: None)

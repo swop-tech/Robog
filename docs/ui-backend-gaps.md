@@ -43,7 +43,7 @@ be repainted as it arrives — but `fetch()` + `response.json()` cannot express 
 
 ```
 event: meta
-data: {"route":"lookup","language":"de","provider":"gemini","model":"gemini-2.5-flash"}
+data: {"route":"lookup","language":"de","provider":"gemini","model":"gemini-3.8-flash"}
 
 event: token
 data: {"delta":"Laut Handbuch beträgt "}

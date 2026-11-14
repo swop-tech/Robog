@@ -280,7 +280,7 @@ laptop or in a container; `python -m api` exposes the same knobs as flags.
 | `ROBOG_API_MEDIA_MAX_AGE` | 86400 | `Cache-Control` seconds for figures |
 | `ROBOG_API_CORS_ORIGINS` | `*` | comma-separated origins for the chat UI |
 | `ROBOG_API_HOST` / `ROBOG_API_PORT` | `0.0.0.0` / `8000` | bind address |
-| `ROBOG_LLM_PROVIDER` / `ROBOG_LLM_MODEL` | `auto` / `gemini-2.5-flash` | the answer generator |
+| `ROBOG_LLM_PROVIDER` / `ROBOG_LLM_MODEL` | `auto` / `gemini-3.8-flash` | the answer generator |
 
 ## Behaviour worth knowing
 

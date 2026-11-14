@@ -12,7 +12,7 @@ question (EN/DE/IT)
    │
    ├─ 1. retrieve                    retrieve/engine.py    chunks + params + profiles (Bonus 01 export)
    ├─ 2. number the evidence         answer/evidence.py    [1] … [n], each with its citation trail
-   ├─ 3. generate                    answer/llm.py         gemini-2.5-flash  OR  offline formatter
+   ├─ 3. generate                    answer/llm.py         gemini-3.8-flash    OR  offline formatter
    ├─ 4. validate                    answer/validator.py   citation + numeric + quote checks  (G5)
    ├─ 5. repair or regenerate        answer/composer.py    strip bad numbers, re-ask once, else offline
    └─ 6. answer                      answer/composer.py    text + citations + figures + validation report
@@ -45,7 +45,7 @@ answer.grounded      # nothing had to be dropped, every claim is supported
 
 | Path | When | Cost |
 |---|---|---|
-| `gemini-2.5-flash` via `google-genai` | `GEMINI_API_KEY` present (already used by the embedding step) | free AI Studio tier |
+| `gemini-3.8-flash` via `google-genai` | `GEMINI_API_KEY` present (already used by the embedding step) | Google AI Studio |
 | **deterministic grounded formatter** (`answer/formatter.py`) | no key, no `google-genai`, quota error, timeout, malformed response, **or a failed validation with no good retry** | free, instant, offline |
 
 No LlamaIndex: the prompt, the evidence numbering and the verification are ours, so the

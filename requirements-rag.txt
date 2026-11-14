@@ -10,7 +10,7 @@ chromadb>=1.0
 # local (default): free, offline, no API key
 sentence-transformers>=3.0
 # gemini: free Google AI Studio tier, needs the GEMINI_API_KEY env variable.
-# Also used for answer generation (gemini-2.5-flash) -- no LlamaIndex needed:
+# Also used for answer generation (gemini-3.8-flash) -- no LlamaIndex needed:
 # the composer calls the API directly and validates every answer itself.
 google-genai>=1.0
 

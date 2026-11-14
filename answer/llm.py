@@ -4,7 +4,7 @@ The composer asks a *generator* for prose; the composer itself owns the prompt,
 the evidence numbering and -- critically -- the validation. That separation is
 what makes the LLM optional:
 
-* ``GeminiGenerator`` -- ``gemini-2.5-flash`` via ``google-genai`` (already in
+* ``GeminiGenerator`` -- ``gemini-3.8-flash`` via ``google-genai`` (already in
   ``requirements-rag.txt`` for the embedding step; no LlamaIndex, no extra
   framework). The key comes from ``GEMINI_API_KEY`` in ``.env``.
 * ``OfflineGenerator`` -- the deterministic formatter of ``answer/formatter.py``.
@@ -39,9 +39,10 @@ from retrieve.vector import VectorStoreUnavailable, create_gemini_client
 from .evidence import Evidence
 from .formatter import Draft, format_answer
 
-#: The answering model. ``gemini-2.5-flash`` is on the free AI Studio tier and
-#: is fast enough for a chat demo; override with ``ROBOG_LLM_MODEL``.
-DEFAULT_LLM_MODEL = "gemini-2.5-flash"
+#: The answering model. Google has limited the 2.5 Flash family to existing
+#: users (``gemini-2.5-flash`` returns 404 NOT_FOUND for new keys) and points new
+#: projects to 3.8 Flash. Override with ``ROBOG_LLM_MODEL`` if your key differs.
+DEFAULT_LLM_MODEL = "gemini-3.8-flash"
 ENV_LLM_MODEL = "ROBOG_LLM_MODEL"
 ENV_LLM_PROVIDER = "ROBOG_LLM_PROVIDER"     # "gemini" | "offline"
 ENV_LLM_TIMEOUT = "ROBOG_LLM_TIMEOUT"
@@ -93,7 +94,7 @@ class OfflineGenerator:
 
 
 class GeminiGenerator:
-    """``gemini-2.5-flash`` through ``google-genai`` (one HTTP call, no framework)."""
+    """``gemini-3.8-flash`` through ``google-genai`` (one HTTP call, no framework)."""
 
     name = "gemini"
 

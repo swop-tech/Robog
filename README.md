@@ -28,7 +28,7 @@ source-grounded answers for both technicians and non-technical users.
 | Retrieval | Plain Python (`retrieve/`): BM25 + parameter index + product profile cards + figure route + language policy, no dependencies |
 | Embeddings | `gemini-embedding-2` (free tier) or `multilingual-e5-small` (offline) — pluggable |
 | Vector DB | Chroma (embedded) |
-| Answering | `gemini-2.5-flash` (free tier) **or** the deterministic offline formatter — pluggable |
+| Answering | `gemini-3.8-flash` (Google AI Studio) **or** the deterministic offline formatter — pluggable |
 | API | FastAPI + Uvicorn (`api/`), stdlib-only client for the plug-and-play demo |
 | RAG framework | none needed: retrieval, prompting and evidence validation are ours (LlamaIndex optional) |
 | Environment | Python 3.11+, VS Code, Git — any laptop, CPU-only |
@@ -112,7 +112,7 @@ python -m answer.evaluate --vector                              # same benchmark
 ```
 
 `AnswerComposer` = retrieve → number the evidence → generate → **validate** → answer.
-Generation is `gemini-2.5-flash` when `GEMINI_API_KEY` is set, and the deterministic grounded
+Generation is `gemini-3.8-flash` when `GEMINI_API_KEY` is set, and the deterministic grounded
 formatter otherwise (no key, no network, no model download) — the same formatter that takes over
 if the API fails or an answer cannot be repaired. The answer is always written in the question's
 language and says so when the evidence came from another language.
