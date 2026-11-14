@@ -16,10 +16,12 @@ import json
 import sys
 
 from .engine import SearchEngine
+from .env import load_dotenv
 from .vector import ChromaRetriever, VectorStoreUnavailable
 
 
 def main() -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Search the PUDU manuals.")
     parser.add_argument("query", help="the question, in EN, DE or IT")
     parser.add_argument("--k", default=5, type=int, help="number of chunks (default: 5)")
@@ -39,13 +41,23 @@ def main() -> None:
     parser.add_argument("--collection", default=None,
                         help="Chroma collection name (default: ROBOG_CHROMA_COLLECTION or robog)")
     parser.add_argument("--provider", default=None, choices=["local", "gemini"],
-                        help="query embedding provider (default: ROBOG_EMBED_PROVIDER or local)")
+                        help="query embedding provider (default: store metadata, ROBOG_EMBED_PROVIDER, or local)")
+    parser.add_argument("--model", default=None,
+                        help="override query embedding model ID (default: store metadata or ROBOG_EMBED_MODEL)")
+    parser.add_argument("--dims", default=None, type=int,
+                        help="override Gemini query embedding dims (default: store metadata or ROBOG_EMBED_DIMS)")
     args = parser.parse_args()
 
     retriever = None
     if args.vector:
         try:
-            retriever = ChromaRetriever.connect(args.chroma, args.collection, args.provider)
+            retriever = ChromaRetriever.connect(
+                args.chroma,
+                args.collection,
+                args.provider,
+                args.dims,
+                model=args.model,
+            )
         except VectorStoreUnavailable as exc:
             # Demo-safe: keyword retrieval still works, the warning says why.
             print(f"warning: dense retrieval disabled: {exc}", file=sys.stderr)

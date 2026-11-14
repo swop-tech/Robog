@@ -262,6 +262,308 @@ class RealChromaIntegrationTests(unittest.TestCase):
             result = engine.search("payload kg", k=3, language="en")
             self.assertTrue(any("vector" in h.sources for h in result.hits))
 
+    def test_index_chunks_roundtrip_and_dimension_switch_on_real_chroma(self):
+        try:
+            import chromadb  # noqa: F401
+        except ImportError:
+            self.skipTest("install chromadb to run the real-store integration test")
+        from unittest.mock import patch
+        from ingest.embed_index import GeminiEmbedder, index_chunks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks_file = Path(tmp) / "chunks.jsonl"
+            chunks_file.write_text(
+                "\n".join(json.dumps(r) for r in ROWS) + "\n",
+                encoding="utf-8",
+            )
+            persist_dir = Path(tmp) / "chroma"
+
+            # First index at 128 dims, then re-index at 256 dims to prove real
+            # Chroma recreates cleanly instead of raising InvalidDimensionException.
+            client_128 = _StrictGenAIClient()
+            index_chunks(
+                chunks_file,
+                persist_dir,
+                provider="gemini",
+                dims=128,
+                embedder=GeminiEmbedder(dims=128, client=client_128),
+            )
+            client_256 = _StrictGenAIClient()
+            total = index_chunks(
+                chunks_file,
+                persist_dir,
+                provider="gemini",
+                dims=256,
+                embedder=GeminiEmbedder(dims=256, client=client_256),
+            )
+            self.assertEqual(total, len(ROWS))
+
+            clean_env = {
+                k: v for k, v in os.environ.items()
+                if k not in ("ROBOG_EMBED_PROVIDER", "ROBOG_EMBED_DIMS", "ROBOG_EMBED_MODEL")
+            }
+            query_client = _StrictGenAIClient()
+            with patch.dict(os.environ, clean_env, clear=True), \
+                 patch("retrieve.vector.load_dotenv", return_value=None), \
+                 patch("retrieve.vector.create_gemini_client", return_value=query_client):
+                # No provider or dims passed -- auto-detected from Chroma metadata!
+                retriever = ChromaRetriever.connect(persist_dir=persist_dir)
+                self.assertEqual(retriever.provider, "gemini")
+                hits = retriever.search("payload kg", k=2)
+                self.assertEqual(len(hits), 2)
+                self.assertEqual(
+                    query_client.models.calls[0]["config"],
+                    {"output_dimensionality": 256, "task_type": "RETRIEVAL_QUERY"},
+                )
+
+
+# ---------------------------------------------------------------------------
+# .env loader, Gemini SDK contract, L2 normalization & Chroma metadata tests
+# ---------------------------------------------------------------------------
+class _FakeEmbeddingObj:
+    def __init__(self, values: list[float]):
+        self.values = values
+
+
+class _FakeEmbedResponse:
+    def __init__(self, embeddings: list[list[float]]):
+        self.embeddings = [_FakeEmbeddingObj(v) for v in embeddings]
+
+
+class _StrictGenAIModels:
+    """Mimics google.genai.models.Models.embed_content(*, model, contents, config=None).
+
+    Any unexpected top-level keyword (such as the old broken
+    ``output_dimensionality=...``) raises ``TypeError`` just like the real SDK.
+    """
+
+    def __init__(self, fail_times: int = 0, fail_error: Exception | None = None):
+        self.calls: list[dict] = []
+        self.fail_times = fail_times
+        self.fail_error = fail_error
+
+    def embed_content(self, *, model: str, contents, config=None):
+        self.calls.append({"model": model, "contents": list(contents), "config": dict(config or {})})
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            raise (self.fail_error or RuntimeError("429 RESOURCE_EXHAUSTED: rate limit"))
+        if self.fail_error is not None:
+            raise self.fail_error
+        dim = int((config or {}).get("output_dimensionality") or 4)
+        # Deliberately unnormalized vectors [3.0, 4.0, 0.0, ...] (norm = 5.0)
+        raw = [[3.0, 4.0] + [0.0] * max(0, dim - 2) for _ in contents]
+        return _FakeEmbedResponse(raw)
+
+
+class _StrictGenAIClient:
+    def __init__(self, fail_times: int = 0, fail_error: Exception | None = None):
+        self.models = _StrictGenAIModels(fail_times=fail_times, fail_error=fail_error)
+
+
+class DotenvTests(unittest.TestCase):
+    def test_parses_comments_quotes_and_exports(self):
+        from retrieve.env import parse_dotenv
+
+        parsed = parse_dotenv(
+            "# comment\n"
+            "GEMINI_API_KEY='AIza-test-123'\n"
+            "export ROBOG_EMBED_PROVIDER=\"gemini\"\n"
+            "ROBOG_EMBED_DIMS=768 # inline comment\n"
+            "INVALID LINE\n"
+        )
+        self.assertEqual(parsed["GEMINI_API_KEY"], "AIza-test-123")
+        self.assertEqual(parsed["ROBOG_EMBED_PROVIDER"], "gemini")
+        self.assertEqual(parsed["ROBOG_EMBED_DIMS"], "768")
+
+    def test_load_dotenv_does_not_clobber_existing_env(self):
+        from unittest.mock import patch
+        from retrieve.env import load_dotenv
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "GEMINI_API_KEY=from-file\nROBOG_EMBED_MODEL=gemini-embedding-001\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"GEMINI_API_KEY": "already-exported"}, clear=False):
+                os.environ.pop("ROBOG_EMBED_MODEL", None)
+                loaded = load_dotenv(env_file)
+                self.assertEqual(loaded, env_file)
+                self.assertEqual(os.environ["GEMINI_API_KEY"], "already-exported")
+                self.assertEqual(os.environ["ROBOG_EMBED_MODEL"], "gemini-embedding-001")
+
+
+class GeminiEmbeddingContractTests(unittest.TestCase):
+    def test_document_embedder_uses_config_task_type_and_normalizes(self):
+        from ingest.embed_index import GeminiEmbedder
+
+        client = _StrictGenAIClient()
+        embedder = GeminiEmbedder(dims=128, model_name="gemini-embedding-2", batch_size=2, client=client)
+        vectors = embedder.embed(["first chunk", "second chunk", "third chunk"])
+
+        self.assertEqual(len(vectors), 3)
+        self.assertEqual(len(client.models.calls), 2, "3 texts at batch_size=2 -> 2 API calls")
+        for call in client.models.calls:
+            self.assertEqual(call["model"], "gemini-embedding-2")
+            self.assertEqual(
+                call["config"],
+                {"output_dimensionality": 128, "task_type": "RETRIEVAL_DOCUMENT"},
+            )
+        for vec in vectors:
+            self.assertEqual(len(vec), 128)
+            norm = math.sqrt(sum(v * v for v in vec))
+            self.assertAlmostEqual(norm, 1.0, places=6)
+            self.assertAlmostEqual(vec[0], 0.6, places=6)
+            self.assertAlmostEqual(vec[1], 0.8, places=6)
+
+    def test_query_embedder_uses_retrieval_query_task_type(self):
+        from unittest.mock import patch
+        from retrieve.vector import make_embedder
+
+        client = _StrictGenAIClient()
+        with patch("retrieve.vector.create_gemini_client", return_value=client):
+            embed_fn, provider = make_embedder("gemini", 256, model="gemini-embedding-001")
+        self.assertEqual(provider, "gemini")
+        vectors = embed_fn(["how heavy is FlashBot?"])
+        self.assertEqual(len(vectors), 1)
+        self.assertEqual(len(vectors[0]), 256)
+        self.assertEqual(
+            client.models.calls[0]["config"],
+            {"output_dimensionality": 256, "task_type": "RETRIEVAL_QUERY"},
+        )
+        self.assertEqual(client.models.calls[0]["model"], "gemini-embedding-001")
+
+    def test_retries_transient_rate_limit_errors(self):
+        from retrieve.vector import embed_gemini_batch
+
+        sleeps: list[float] = []
+        client = _StrictGenAIClient(fail_times=2)
+        vectors = embed_gemini_batch(
+            client,
+            ["test"],
+            dims=128,
+            base_delay=0.5,
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(len(vectors), 1)
+        self.assertEqual(len(client.models.calls), 3)
+        self.assertEqual(sleeps, [0.5, 1.0])
+
+    def test_model_not_found_gives_model_override_hint(self):
+        from retrieve.vector import embed_gemini_batch
+
+        client = _StrictGenAIClient(fail_error=RuntimeError("404 NOT_FOUND: model not found"))
+        with self.assertRaises(VectorStoreUnavailable) as ctx:
+            embed_gemini_batch(client, ["test"], model_name="gemini-embedding-2", dims=128)
+        self.assertIn("ROBOG_EMBED_MODEL", str(ctx.exception))
+
+
+class IndexAndCollectionMetadataTests(unittest.TestCase):
+    def test_format_passage_adds_product_and_section_without_mutating_stored_doc(self):
+        from ingest.embed_index import format_passage, index_chunks
+
+        row = _row("c1", "Check battery switch.", "en", "BellaBot")
+        passage = format_passage(row)
+        self.assertIn("BellaBot", passage)
+        self.assertIn("Check battery switch.", passage)
+
+        # Fake in-memory Chroma client to verify collection replacement & stored docs
+        class _MemCollection:
+            def __init__(self, name: str, metadata: dict):
+                self.name = name
+                self.metadata = dict(metadata)
+                self.upserted: list[dict] = []
+
+            def count(self) -> int:
+                return sum(len(b["ids"]) for b in self.upserted)
+
+            def upsert(self, *, ids, documents, metadatas, embeddings):
+                self.upserted.append(
+                    {"ids": ids, "documents": documents, "metadatas": metadatas, "embeddings": embeddings}
+                )
+
+        class _MemClient:
+            def __init__(self):
+                self.collections: dict[str, _MemCollection] = {}
+                self.deleted: list[str] = []
+
+            def get_collection(self, name: str):
+                if name not in self.collections:
+                    raise ValueError("missing")
+                return self.collections[name]
+
+            def delete_collection(self, name: str):
+                self.deleted.append(name)
+                self.collections.pop(name, None)
+
+            def get_or_create_collection(self, name: str, metadata: dict):
+                if name not in self.collections:
+                    self.collections[name] = _MemCollection(name, metadata)
+                return self.collections[name]
+
+        mem_client = _MemClient()
+        # Seed an incompatible 384-dim 'local' collection first
+        mem_client.get_or_create_collection(
+            "robog", {"hnsw:space": "cosine", "provider": "local", "model": "e5", "dims": 384}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks_file = Path(tmp) / "chunks.jsonl"
+            chunks_file.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            gemini_client = _StrictGenAIClient()
+            from ingest.embed_index import GeminiEmbedder
+
+            embedder = GeminiEmbedder(dims=128, model_name="gemini-embedding-2", client=gemini_client)
+            total = index_chunks(
+                chunks_file,
+                Path(tmp) / "chroma",
+                provider="gemini",
+                dims=128,
+                embedder=embedder,
+                chroma_client=mem_client,
+            )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(mem_client.deleted, ["robog"], "stale 384d local collection must be replaced")
+        coll = mem_client.collections["robog"]
+        self.assertEqual(coll.metadata["provider"], "gemini")
+        self.assertEqual(coll.metadata["dims"], 128)
+        # Stored document text remains clean verbatim text (no prepended header)
+        self.assertEqual(coll.upserted[0]["documents"], ["Check battery switch."])
+        # Embedded input included the product context
+        self.assertIn("BellaBot", gemini_client.models.calls[0]["contents"][0])
+
+    def test_connect_autodetects_store_metadata_and_guards_mismatch(self):
+        from unittest.mock import patch
+
+        class _StoredCollection:
+            metadata = {"provider": "gemini", "model": "gemini-embedding-001", "dims": 768}
+
+            def count(self) -> int:
+                return 3
+
+        class _StoredClient:
+            def get_collection(self, name: str):
+                return _StoredCollection()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            clean_env = {
+                k: v for k, v in os.environ.items()
+                if k not in ("ROBOG_EMBED_PROVIDER", "ROBOG_EMBED_DIMS", "ROBOG_EMBED_MODEL")
+            }
+            with patch.dict(os.environ, clean_env, clear=True), \
+                 patch("retrieve.vector.load_dotenv", return_value=None), \
+                 patch("retrieve.vector._load_client", return_value=_StoredClient()), \
+                 patch("retrieve.vector.make_embedder", return_value=(FakeEmbedder().embed, "gemini")) as mocked:
+                retriever = ChromaRetriever.connect(persist_dir=tmp)
+                self.assertEqual(retriever.provider, "gemini")
+                mocked.assert_called_once_with("gemini", 768, model="gemini-embedding-001")
+
+                # Forcing provider='local' on a gemini store must raise an actionable error
+                with self.assertRaises(VectorStoreUnavailable) as ctx:
+                    ChromaRetriever.connect(persist_dir=tmp, provider="local")
+                self.assertIn("provider='gemini'", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
