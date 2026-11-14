@@ -238,15 +238,21 @@ function renderFigures(figures) {
 
 function renderVerification(v) {
   if (!v) return "";
-  const state = v.verified ? "good" : v.grounded ? "warn" : "bad";
-  const icon = v.verified ? "✓" : v.grounded ? "!" : "✕";
-  const label = v.verified ? "Verified" : v.grounded ? "Grounded" : "Check failed";
-  const counts = `${v.sentences_cited ?? 0}/${v.sentences_checked ?? 0} cited · ${v.numbers_verified ?? 0}/${v.numbers_checked ?? 0} numbers`;
+  // "checked" is false when there was no evidence at all: 0/0 claims passes
+  // every check vacuously, and a green "Verified" badge on "I could not find
+  // this" would certify nothing. Show a neutral badge instead.
+  const none = v.checked === false || v.state === "no-evidence";
+  const state = none ? "none" : v.verified ? "good" : v.grounded ? "warn" : "bad";
+  const icon = none ? "—" : v.verified ? "✓" : v.grounded ? "!" : "✕";
+  const label = none ? "Not answered from the manuals"
+    : v.verified ? "Verified" : v.grounded ? "Grounded" : "Check failed";
+  const counts = none ? ""
+    : ` · ${v.sentences_cited ?? 0}/${v.sentences_checked ?? 0} cited · ${v.numbers_verified ?? 0}/${v.numbers_checked ?? 0} numbers`;
   return `
     <div class="verify">
       <button class="verify-badge verify-badge--${state}" type="button" data-action="verify" aria-expanded="false">
-        <span class="v-icon">${icon}</span><span>${label}</span>
-        <span class="v-counts">· ${esc(counts)}</span><span class="v-caret">▾</span>
+        <span class="v-icon">${icon}</span><span>${esc(label)}</span>
+        <span class="v-counts">${esc(counts)}</span><span class="v-caret">▾</span>
       </button>
       <div class="verify-details" hidden>${verifyDetailsHTML(v)}</div>
     </div>`;
@@ -262,18 +268,21 @@ function verifyDetailsHTML(v) {
         <div class="rate-bar"><div class="rate-fill ${cls}" style="width:${pct}%"></div></div>
       </div>`;
   };
+  const nothingChecked = v.checked === false || v.state === "no-evidence";
   const issues = (v.issues || []).length
     ? `<ul class="issues">${v.issues.map((it) =>
         `<li class="issue ${it.severity === "error" ? "issue--error" : ""}"><b>${esc(it.check)} · ${esc(it.action || it.severity)}</b> — ${esc(it.message)}</li>`
       ).join("")}</ul>`
-    : `<p class="verify-summary" style="margin:12px 0 0;color:var(--good)">No issues — every claim is cited and every number matched the source.</p>`;
+    : nothingChecked
+      ? `<p class="verify-summary" style="margin:12px 0 0;color:var(--muted)">The retrieval engine found no passage that answers this, so the checks had nothing to certify. Rephrase, name the robot, or ask for a parameter.</p>`
+      : `<p class="verify-summary" style="margin:12px 0 0;color:var(--good)">No issues — every claim is cited and every number matched the source.</p>`;
   return `
     <p class="verify-summary">${esc(v.summary || "")}</p>
-    <div class="verify-grid">
+    ${nothingChecked ? "" : `<div class="verify-grid">
       ${rate("Citations", v.sentences_cited ?? 0, v.sentences_checked ?? 0, v.citation_rate)}
       ${rate("Numbers", v.numbers_verified ?? 0, v.numbers_checked ?? 0, v.numeric_rate)}
       ${rate("Quotes", v.quotes_verified ?? 0, v.quotes_checked ?? 0, v.quote_rate)}
-    </div>
+    </div>`}
     ${issues}`;
 }
 

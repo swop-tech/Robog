@@ -11,7 +11,7 @@ python -m ingest.run --data data        # once: build/chunks.jsonl + params + pr
 python -m api                           # http://0.0.0.0:8000 — chat at /, Swagger at /docs
 uvicorn api.app:app --reload            # the same app (reads .env too)
 python -m api --port 8080 --vector off  # keyword-only + a different port
-python -m unittest tests.test_api -v    # 61 tests, no API key, no network
+python -m unittest tests.test_api -v    # 63 tests, no API key, no network
 python -m unittest tests.test_ui -v     # 11 web-chat serving tests
 ```
 

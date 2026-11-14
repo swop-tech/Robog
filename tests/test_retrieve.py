@@ -129,6 +129,19 @@ class RouterTests(unittest.TestCase):
     def test_comparison_without_keyword(self):
         self.assertEqual(route("BellaBot vs KettyBot", None).kind, "advisory")
 
+    def test_comparison_plural_and_verb_forms(self):
+        # A cue list carrying only the singular used to route the plural to
+        # `default`, where nothing but framing words is left to score.
+        self.assertEqual(route("What are the differences between BellaBot and BellaBot Pro?", "en").kind, "advisory")
+        self.assertEqual(route("Which is better for a hotel, BellaBot or KettyBot?", "en").kind, "advisory")
+        self.assertEqual(route("Was sind die Unterschiede zwischen BellaBot und KettyBot?", "de").kind, "advisory")
+        self.assertEqual(route("Quali sono le differenze tra BellaBot e BellaBot Pro?", "it").kind, "advisory")
+        self.assertEqual(route("Che differenza c'è tra SH1 e MT1?", "it").kind, "advisory")
+
+    def test_difference_wording_does_not_swallow_procedures(self):
+        # "different/differently" is not a comparison of two products.
+        self.assertEqual(route("The robot behaves differently after the update", "en").kind, "default")
+
     def test_default(self):
         self.assertEqual(route("How do I clean the filter?", "en").kind, "default")
 
@@ -525,6 +538,36 @@ class EngineTests(unittest.TestCase):
         self.assertIn("BellaBot", res.products)
         self.assertIn("KettyBot Pro", res.products)
         self.assertEqual([p.product for p in res.profiles], ["KettyBot Pro", "BellaBot"])
+
+    def test_plural_comparison_of_two_named_products_is_advisory(self):
+        # Used to return zero hits: the plural cue was missing, so BM25 was left
+        # scoring the single word "differences" against two robots we do have.
+        res = self.engine.search("What are the differences between BellaBot and BellaBot Pro?", k=5)
+        self.assertEqual(res.route, "advisory")
+        self.assertIn("BellaBot", res.products)
+        self.assertIn("BellaBot Pro", res.products)
+        self.assertTrue(res.hits)
+        self.assertGreaterEqual(len(res.profiles), 2)
+        self.assertEqual({p.product for p in res.profiles}, {"BellaBot", "BellaBot Pro"})
+
+    def test_product_fallback_when_the_wording_matches_nothing(self):
+        # "waterproof" appears in no manual, but the question names a robot we
+        # have: answer with its specification/environment sections, not "not found".
+        res = self.engine.search("Is the KettyBot waterproof?", k=5)
+        self.assertTrue(res.hits, "a named product must never return zero hits")
+        self.assertTrue(all(hit.product == "KettyBot" for hit in res.hits), res.hits)
+        self.assertIn("product-fallback", res.tiers_used)
+        self.assertTrue(any("wording" in note for note in res.notes), res.notes)
+
+    def test_product_fallback_respects_a_hard_language_filter(self):
+        # With cross-lingual fallback off there is no Italian FlashBot manual, so
+        # the fallback must find nothing either -- that is the baseline the
+        # language-policy table in the README compares against.
+        res = self.engine.search(
+            "Qual è la velocità massima del FlashBot?", k=5, cross_lingual_fallback=False
+        )
+        self.assertEqual(res.hits, [])
+        self.assertNotIn("product-fallback", res.tiers_used)
 
     def test_advisory_numeric_300kg_ranks_t300_first(self):
         res = self.engine.search("Which robot can carry 300 kg in a factory?", k=4)

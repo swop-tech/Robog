@@ -48,6 +48,7 @@ from retrieve.vector import (
     GEMINI_MODEL,
     LOCAL_MODEL,
     VectorStoreUnavailable,
+    corpus_fingerprint,
     create_gemini_client,
     embed_gemini_batch,
 )
@@ -62,6 +63,30 @@ DEFAULT_BATCH_SIZE = 40
 DEFAULT_GEMINI_TPM = 25_000
 QUOTA_WINDOW_SECONDS = 62.0
 CHROMA_UPSERT_BATCH = 500
+
+
+def _stamp_corpus(collection, rows: list[dict]) -> None:
+    """Record which corpus this index was embedded from.
+
+    ``ChromaRetriever.connect`` compares the digest with the chunk ids it was
+    given and refuses a stale index, because a dense-only hit is served from the
+    vector store's own copy of the text -- words that may no longer exist in any
+    current manual would otherwise reach an answer (and a citation).
+    """
+    try:
+        # Chroma's modify() *replaces* the metadata dict, so carry the existing
+        # keys over -- but never ``hnsw:*``: the distance function is fixed at
+        # creation and echoing it back raises ("cannot change once created").
+        meta = {
+            key: value
+            for key, value in (getattr(collection, "metadata", None) or {}).items()
+            if not str(key).startswith("hnsw:")
+        }
+        meta["corpus_digest"] = corpus_fingerprint(row["id"] for row in rows)
+        meta["corpus_chunks"] = len(rows)
+        collection.modify(metadata=meta)
+    except Exception as exc:  # a store that cannot take metadata is not fatal
+        print(f"  warning: could not record the corpus digest ({type(exc).__name__}: {exc})")
 
 
 def format_passage(row: dict) -> str:
@@ -433,11 +458,13 @@ def index_chunks(
         )
     if not pending_rows and collection is not None:
         total = collection.count()
+        _stamp_corpus(collection, rows)
         print(f"All {total} chunks already indexed in {persist_path} (pass --reset to re-embed).")
         return total
     if not pending_rows:
         existing = chroma_client.get_collection(name=collection_name)
         total = existing.count()
+        _stamp_corpus(existing, rows)
         print(f"All {total} chunks already indexed in {persist_path} (pass --reset to re-embed).")
         return total
 
@@ -468,6 +495,7 @@ def index_chunks(
         print(f"  embedded & saved {completed}/{len(rows)}")
 
     assert collection is not None
+    _stamp_corpus(collection, rows)
     total = collection.count()
     print(
         f"Indexed {total} chunks into {persist_path} "

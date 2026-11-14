@@ -5,6 +5,8 @@ Conversational access to robot documentation — hackathon project for the **Tel
 Turn buried robot docs (manuals, datasheets, specs, accessories guides) into accurate, clear,
 source-grounded answers for both technicians and non-technical users.
 
+- 🎯 **Brief vs. behaviour — what the judges ask, what the bot answers, what is still open:**
+  [`docs/brief-alignment.md`](docs/brief-alignment.md)
 - 📄 Challenge analysis & suggested path: [`docs/challenge-analysis.md`](docs/challenge-analysis.md)
 - 🔍 Review of the team's pipeline diagram: [`docs/pipeline-review.md`](docs/pipeline-review.md)
 - 🧰 Stack decisions (embeddings, RAG framework, vector DB): [`docs/stack-decisions.md`](docs/stack-decisions.md)
@@ -65,7 +67,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 270 tests
+python -m unittest discover -s tests -p "test_*.py"       # 295 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -107,6 +109,7 @@ python -m answer "Qual è la velocità massima del FlashBot?"    # Italian answe
 python -m answer "Zeig mir ein Bild vom FlashBot" --show-evidence
 python -m answer "Which robot fits my restaurant?" --json       # the shape POST /ask will return
 python -m answer.evaluate --out build/answer-report.md          # 28-question answer benchmark
+python -m answer.evaluate --vector                              # same benchmark through the hybrid
 ```
 
 `AnswerComposer` = retrieve → number the evidence → generate → **validate** → answer.
@@ -141,7 +144,7 @@ curl 'localhost:8000/products?language=it&product=FlashBot&parameter=payload'
 curl -OJ localhost:8000/media/flashbot_user_manual_v1_0_multilanguage-de/de-p021R-fig01.png
 
 python -m api.client "Wieviel Zuladung hat der FlashBot?"   # 40-line second client
-python -m unittest tests.test_api -v                        # 57 tests
+python -m unittest tests.test_api -v                        # 63 tests
 ```
 
 The retrieval engine and the answer composer as a service, re-implementing nothing:
@@ -163,7 +166,7 @@ and the web chat renders them inline.
 
 ```bash
 python -m api                         # then open http://0.0.0.0:8000 in a browser
-python -m unittest tests.test_ui -v   # 11 serving-contract tests (no browser, key or corpus)
+python -m unittest tests.test_ui -v   # 13 serving-contract tests (no browser, key or corpus)
 ```
 
 A fast, **zero-build** single-page chat (`ui/`: plain HTML + CSS + one ES module, no bundler, no

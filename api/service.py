@@ -620,9 +620,20 @@ def _verification(answer: Answer) -> dict:
         summary = report.summary(answer.language)
     except Exception:  # a missing localized string must not break /ask
         summary = f"{report.sentences_cited}/{report.sentences_checked} claims cited"
+    checks_run = bool(getattr(report, "checks_run", True))
+    if not checks_run:
+        state = "no-evidence"      # 0/0 passes every check vacuously -- not a pass
+    elif not report.ok:
+        state = "failed"
+    elif report.verified:
+        state = "verified"
+    else:
+        state = "repaired"
     return {
         "grounded": answer.grounded,
         "verified": answer.verified,
+        "checked": checks_run,
+        "state": state,
         "summary": summary,
         "citation_rate": round(report.citation_rate, 3),
         "numeric_rate": round(report.numeric_rate, 3),

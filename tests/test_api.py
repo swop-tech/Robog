@@ -340,6 +340,26 @@ class ApiTest(unittest.TestCase):
         self.assertGreaterEqual(payload["verification"]["citation_rate"], 1.0)
         self.assertEqual(payload["verification"]["numbers_unverified"], 0)
 
+    def test_ask_verification_state_for_a_grounded_answer(self) -> None:
+        payload = self.client.post(
+            "/ask", json={"question": "What is the payload of the FlashBot?"}
+        ).json()
+        self.assertTrue(payload["verification"]["checked"])
+        self.assertEqual(payload["verification"]["state"], "verified")
+
+    def test_ask_does_not_certify_an_answer_it_could_not_ground(self) -> None:
+        # 0/0 claims passes every check vacuously. A green "Verified" badge on
+        # "which robot do you mean?" would certify nothing, so /ask reports the
+        # state instead of letting the client infer it from `verified`.
+        payload = self.client.post(
+            "/ask", json={"question": "What is the value of this parameter?"}
+        ).json()
+        verification = payload["verification"]
+        self.assertFalse(verification["checked"])
+        self.assertEqual(verification["state"], "no-evidence")
+        self.assertEqual(payload["citations"], [])
+        self.assertNotIn("0/0", verification["summary"])
+
     def test_ask_answers_in_the_question_language_and_discloses_cross_lingual(self) -> None:
         # The fixture's German manual has no "Max speed" row: the answer is
         # German, the evidence is English, and the response says so.

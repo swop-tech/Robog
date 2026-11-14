@@ -28,14 +28,17 @@ Inspected in this repository — `ingest/embed_index.py`:
 
 | Setting | Value | Where |
 |---|---|---|
-| Model id (exact) | `gemini-embedding-2` | `GEMINI_MODEL` constant |
+| Model id (exact) | `gemini-embedding-2` (override with `ROBOG_EMBED_MODEL`) | `GEMINI_MODEL` constant |
 | Output dimension | **1536** | `--dims` default, stored via `output_dimensionality` |
-| Batching | 100 texts per `embed_content` call | `range(0, len(texts), 100)` |
-| Auth | `GEMINI_API_KEY` or `GOOGLE_API_KEY` env var — never in code, never in git | `GeminiEmbedder.__init__` |
-| Document input | Official QA template: ``title: {title} \| text: {text}`` (``title: none`` when absent) | ``gemini_document_text()`` in the module (tested) |
-| Vectors normalized | no — Gemini outputs unit-normalized embeddings for cosine space | Chroma collection metadata `hnsw:space: cosine` |
-| Input limit check | max chunk 2,832 chars ≈ 809 tokens — all chunks ≪ 8,192-token limit | measured on `build/chunks.jsonl` |
-| Input volume | ≈ 237k–271k tokens**†** total; **14** API calls for 1,351 chunks | measured on `build/chunks.jsonl` |
+| Task signal | `task_type` in the request config: `RETRIEVAL_DOCUMENT` when indexing, `RETRIEVAL_QUERY` when querying | `GeminiEmbedder.embed_batch` / `_gemini_embedder` |
+| Batching | **40** texts per `embed_content` call (`DEFAULT_BATCH_SIZE`), paced under the free-tier 30k TPM window | `TokenRateLimiter`, `range(0, len(texts), eff_batch)` |
+| Auth | `GEMINI_API_KEY` or `GOOGLE_API_KEY` env var — never in code, never in git | `resolve_gemini_api_key()` |
+| Document input | `"{product} — {section}\n{chunk text}"` — a scope breadcrumb plus the chunk **verbatim** | `format_passage()` |
+| Stored document | the chunk text **verbatim** (no breadcrumb), so citations and the numeric check see only original manual text | `_upsert_rows` |
+| Vectors normalized | **yes** — every vector is L2-normalized before it is stored | `l2_normalize()` in `embed_gemini_batch` |
+| Distance space | cosine | collection metadata `hnsw:space: cosine` |
+| Corpus stamp | `corpus_digest` (sha256 of the chunk ids) + `corpus_chunks` in the collection metadata | `_stamp_corpus()` |
+| Input volume | ≈ 237k–271k tokens**†** total; **~34** API calls for 1,351 chunks at batch 40 | measured on `build/chunks.jsonl` |
 | Persistent store | `build/chroma/` (default `--persist`) | `main()` |
 | Collection | `robog`, created with `get_or_create_collection`, upsert by chunk id | indexing side |
 
@@ -43,26 +46,44 @@ Inspected in this repository — `ingest/embed_index.py`:
 on the free tier; the number exists so we can see we are nowhere near limits.
 
 **Query side — `retrieve/vector.py`:** identical model id, identical dimension (1536),
-and the matching official query template `task: question answering | query: {question}`,
-same env-var auth, plus a per-session cache so fallback languages on identical text don't
-re-embed. Document side and query side are implemented symmetrically and unit-tested —
-that is the hard requirement; nothing is mixed across providers.
+`task_type=RETRIEVAL_QUERY`, same env-var auth, plus a per-session cache so fallback
+languages on identical text don't re-embed. Document side and query side are symmetric
+and unit-tested (`tests/test_vector.py::GeminiEmbeddingContractTests`) — that is the hard
+requirement; nothing is mixed across providers, and `connect()` refuses a collection whose
+recorded provider/dims differ from the embedder it was asked to use.
 
-**Task instructions (APPROVED decision, implemented):** Gemini Embedding 2 moves the
-task signal into the text itself (no legacy `task_type`). We use exactly the approved
-official question-answering format for text-only retrieval:
+**How the task signal is carried (implemented, not aspirational):** an earlier revision of
+this document described text templates (`title: {title} | text: {passage}` for documents,
+`task: question answering | query: {question}` for queries) and a `gemini_document_text()`
+helper. **That helper does not exist in this repository and never shipped.** What the code
+actually does:
 
-- document: `title: {title} | text: {passage}` (`title: none` when a chunk has no title;
-  every current chunk carries `metadata.title`)
-- query: `task: question answering | query: {question}`
-- Figure chunks carry caption/label text with the same document template; the image
-  pixels are never embedded; multimodal image instruction formats are intentionally not
-  applied (nothing image-like is indexed).
+- the task signal goes through the API's own `task_type` field (`RETRIEVAL_DOCUMENT` /
+  `RETRIEVAL_QUERY`), which is what the embedding API is designed for;
+- document scope is carried by the `"{product} — {section}"` breadcrumb that
+  `format_passage()` prepends to the embedded text only — the stored document stays
+  verbatim, so nothing invented can reach a citation;
+- the offline `multilingual-e5-small` path uses the prefixes that model was trained with
+  (`passage: ` / `query: `), applied on the matching side each.
 
-Status honestly stated: templates are implemented and unit-tested, but the exact
-live-API behaviour has **not** been exercised end to end — that happens with the
-production run on the team's machine (§5 measures it). Use exactly these strings; do
-not improvise variants.
+If the team decides to switch to text templates instead of `task_type`, that is a
+one-function change (`format_passage` + `_gemini_embedder`) — but it must be re-embedded
+end to end, and the `corpus_digest` will refuse to serve a half-migrated index.
+
+**Stale-index guard:** `ingest/embed_index.py` stamps the collection with a digest of the
+chunk ids it embedded; `ChromaRetriever.connect(corpus_ids=...)` (wired from
+`SearchEngine.from_build`) compares it against the corpus actually loaded and raises
+`VectorStoreUnavailable` on mismatch. This matters for faithfulness, not just hygiene: a
+dense-only hit is served from the vector store's own copy of the text
+(`SearchEngine._chunk_view`), so a stale index could put words into a cited answer that
+exist in no current manual. Indexes built before the stamp have no digest and are still
+accepted.
+
+Status honestly stated: the contract above is unit-tested against a fake client and against
+real Chroma for storage/dimensions, but the live Gemini API has **not** been exercised end
+to end from this repository (no key). Run `python -m ingest.embed_index --provider gemini`
+and then `python -m answer.evaluate --vector` to measure the dense layer on answers, not
+just on retrieval.
 
 ## 3. What will be embedded — modality by modality (measured representation)
 

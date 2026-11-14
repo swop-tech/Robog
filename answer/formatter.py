@@ -550,18 +550,21 @@ _CATEGORY = {
         "delivery": "delivery robot",
         "cleaning": "cleaning robot",
         "industrial": "industrial transport robot",
+        "industrial_delivery": "industrial delivery robot",
         "disinfection": "disinfection robot",
     },
     "de": {
         "delivery": "Servierroboter",
         "cleaning": "Reinigungsroboter",
         "industrial": "Industrietransportroboter",
+        "industrial_delivery": "Industrie-Lieferroboter",
         "disinfection": "Desinfektionsroboter",
     },
     "it": {
         "delivery": "robot di servizio",
         "cleaning": "robot di pulizia",
         "industrial": "robot per trasporto industriale",
+        "industrial_delivery": "robot di consegna industriale",
         "disinfection": "robot di disinfezione",
     },
 }
@@ -571,7 +574,12 @@ def _category_label(category: str, language: str) -> str:
     if not category:
         return "—"
     table = _CATEGORY.get(language) or _CATEGORY["en"]
-    return table.get(category, category)
+    if category in table:
+        return table[category]
+    # A category the profile builder invents for a future manual must not reach a
+    # user as a raw slug ("industrial_delivery"): humanize it instead.
+    words = [word for word in str(category).replace("-", "_").split("_") if word]
+    return " ".join(words) if words else str(category)
 
 
 def _first_sentence(value: str, limit: int) -> str:

@@ -121,11 +121,16 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 
 | Limit | Next step |
 |---|---|
-| No paraphrase matching ("the robot won't start" vs "power-on failure") | dense retriever (multilingual-e5 / gemini-embedding) as another ranked list in the fusion |
+| No paraphrase matching ("the robot won't start" vs "power-on failure") | dense retriever (multilingual-e5 / gemini-embedding) as another ranked list in the fusion — measurable now with `python -m answer.evaluate --vector` |
+| **Symptom questions have no route**: "the robot keeps bumping into tables" retrieves whatever shares those words, across unrelated products, although the corpus holds `Faults: Solutions` tables | a `troubleshooting` route: symptom lexicon → the named product's fault tables, then a relevance gate in the composer |
 | A large troubleshooting table can outrank the focused procedure on procedural questions | acceptable while the composer reads the top-k; a dense retriever helps here too |
-| `confidence` is recall-based, not calibrated | the answer composer's evidence validation (G5) is now the hard gate; `confidence` is a soft hint |
+| `confidence` is recall-based, not calibrated — it called junk hits for "What does error code E102 mean?" *medium* | `ValidationReport.checks_run` stops a vacuous 0/0 from being shown as a pass; a real relevance check (does the evidence address the question?) is still missing |
 | Lexicon covers parameters and core scenarios, not every procedure | grows from eval misses; keep it small and explainable |
-| Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs | served over HTTP by `GET /media/{doc_id}/{filename}` ([`api.md`](api.md)); UI rendering is what remains |
+| Cue lists are literal, so an unlisted inflection changes the route ("difference between" was there, "differences between" was not) | two distinct product mentions now route `advisory` on their own; longer term an embedding-based or LLM router removes the cue list |
+| A question that names products we have could still retrieve nothing when only framing words remain to score | `_product_fallback_hits`: the named products' spec/overview chunks (or figure, on the figure route), within the language policy, with a note that says the wording did not match |
+| Figure chunks are 476 of 1,351 and their text is generated description prose — cosine-similar to nearly everything | `_demote_figure_hits` puts them last in the dense list on non-visual questions; BM25 already keeps them honest |
+| Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs | served over HTTP by `GET /media/{doc_id}/{filename}` ([`api.md`](api.md)); the web chat renders them inline |
+| A Chroma index outlives the `chunks.jsonl` it was embedded from, and a dense-only hit is served from the store's own text | `corpus_digest` stamped at index time; `connect()` refuses a stale index (see [`gemini_chromadb_explanation.md`](gemini_chromadb_explanation.md) §2) |
 
 ## Next
 

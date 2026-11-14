@@ -66,13 +66,13 @@ ui/       zero-build web chat at GET /  (citations, figures, verification badge)
 Numbers to keep in your head: **63 manuals → 1,351 chunks · 22 products · 3 languages ·
 2,039 parameter rows · 38 profile cards · 0 validation errors · 28-question benchmark ·
 Pass@8 100% keyword · MRR 0.95 · 28/28 answers grounded and verified (offline composer) ·
-274 tests (the real-Chroma integration tests skip until ChromaDB is installed).**
+295 tests with `pip install -r requirements-api.txt` and `chromadb` installed; without them the API and real-Chroma suites skip — except `tests/test_api.py`, which cannot even be imported, so `unittest discover` reports one collection error. Install the API requirements first).**
 
 ## Demo sequence (rehearse twice)
 
 ```bash
 python -m ingest.run --data data                        # 3 s — dataset is real, not staged
-python -m unittest discover -q                          # the proof: 274 tests
+python -m unittest discover -q                          # the proof: 295 tests
 python -m retrieve.evaluate                             # the benchmark table, live
 python -m retrieve "Wieviel Zuladung hat der FlashBot?" # German, exact answer: 20 kg, p. 40
 python -m retrieve "Qual è la velocità massima del FlashBot?"   # IT question → cross-lingual fallback, says so

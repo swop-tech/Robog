@@ -85,6 +85,10 @@ def main(argv: list[str] | None = None) -> int:
         if report.issues:
             for issue in report.issues:
                 print(f"  - {issue.severity.upper()} {issue.check}: {issue.message} [{issue.action}]")
+        elif not report.checks_run:
+            # 0/0 passes every check vacuously -- saying "all checks passed" here
+            # would certify an answer that was never grounded in anything.
+            print("  nothing to verify: no passage of the manuals answered this")
         else:
             print("  all checks passed")
     if answer.notes:

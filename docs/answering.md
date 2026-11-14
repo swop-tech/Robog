@@ -168,18 +168,23 @@ Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 | `answer/composer.py` | retrieve → evidence → generate → validate → (re-ask | fall back) → `Answer` |
 | `answer/evaluate.py` | answer-level benchmark over the 28 questions |
 | `answer/strings.py` | the localized sentences Robog writes itself (EN/DE/IT) |
-| `tests/test_answer.py` | 73 tests: checks, formatter, generators, composer, evaluator, real corpus |
+| `tests/test_answer.py` | 78 tests: checks, formatter, generators, composer, evaluator, real corpus |
 
 ## 6. Known limits (and where they go)
 
 | Limit | Next step |
 |---|---|
 | The offline formatter quotes rather than explains — good for lookups and comparisons, terse for procedures | the LLM path handles prose; the formatter is the floor, not the target |
+| **One register for two personas**: the brief's non-technical user gets `565 mm×537 mm×1290 mm` and `25.6 Ah`, the technician gets the same list | use the route (and an advisory/lookup cue) to pick the register: plain-language recommendation first for advisory, spec sheet for lookup |
+| A lookup that names neither robot nor parameter used to be answered with whatever BM25 returned for the words "value"/"parameter" | the composer now asks back for robot + parameter, in the question's language, and reports `checks_run = false` |
+| `verified` is vacuously true for an answer grounded in nothing (0/0 claims) | `ValidationReport.checks_run` + `verification.state` in `/ask`; the UI renders a neutral badge instead of a green one |
+| Grounding is not relevance: junk evidence can still be fully cited and numerically clean ("error code E102" → passages about the power switch, all checks passed) | a relevance gate — does the cited evidence address the question? — before an answer is allowed to look verified |
 | Evidence is capped at the top ~5 chunks / 3 parameter rows / all profile cards | tune per route once `/ask` has real traffic |
 | A quote is verified against *the refs the sentence cites*; a sentence citing nothing falls back to the whole evidence set | acceptable: the citation check already forces a citation (or drops the claim) |
 | Numeric check is membership, not dimensional analysis (`20 kg` vs `20 cm` is caught, `20 kg` vs `20 kg/m²` is not) | unit-pair comparison covers the corpus' units; extend `UNITS` when new manuals arrive |
-| No answer-quality human eval yet | the 28-question benchmark + a blind read of the report is the honest current state |
+| No answer-quality human eval yet; the 28-question benchmark grades keyword presence in answers the same repo wrote | a second, relevance-judged set from off-benchmark phrasings — [`brief-alignment.md`](brief-alignment.md) §4.2/§4.5 |
 | Gemini path not exercised against the live API in CI (no key) | tested through a fake client; run `--provider gemini` before the demo and keep the offline mode as the fallback |
+| Dense layer unmeasured on answers | `python -m answer.evaluate --vector` prints `retrieval: hybrid (dense …) | keyword only`, so a keyword-only run can no longer be reported as the hybrid |
 
 ## Next
 

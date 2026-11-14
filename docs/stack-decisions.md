@@ -102,7 +102,7 @@ Gemini embeddings — easiest), or **Ollama** running a small model locally
 ## 6. Status: data processing is DONE and tested on the real dataset
 
 ```bash
-python -m unittest tests.test_ingest -v        # 40 tests, all green
+python -m unittest tests.test_ingest -v        # 47 tests, all green
 python -m ingest.run --data data               # run on the dataset in data/
 pip install -r requirements-rag.txt            # only needed for phase 2
 python -m ingest.embed_index --provider gemini # or --provider local
