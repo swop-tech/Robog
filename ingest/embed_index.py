@@ -9,9 +9,12 @@ Both embedding providers are free -- pick one with --provider:
 * ``local``  (default) -- intfloat/multilingual-e5-small via sentence-transformers.
   Runs offline on any laptop, no API key, no rate limits. Best for demos.
 * ``gemini`` -- gemini-embedding-2 via the Google AI Studio free tier.
-  Higher quality, needs the GEMINI_API_KEY environment variable, and has a
-  free-tier request limit (~1,500 requests/day). Vectors are stored at 1536
-  dimensions (the model supports 128-3072; Google recommends 768/1536/3072).
+  Higher quality, needs the GEMINI_API_KEY environment variable. The free
+  tier is rate-limited (community-measured ~100 requests/min, ~1,000
+  requests/day as of 2026-11; Google does not publish the numbers and the
+  limits can change), so the embedder retries with backoff and paces
+  requests. Vectors are stored at 1536 dimensions (the model supports
+  128-3072; Google recommends 768/1536/3072).
 
 Gemini Embedding 2 uses the official question-answering format for text-only
 retrieval (inputs are NOT prefixed with the legacy ``task_type``; the
@@ -41,6 +44,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import time
 from pathlib import Path
 
 # E5 models were trained with these prefixes -- they matter for quality.
@@ -100,13 +105,27 @@ class GeminiEmbedder:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), 100):  # batch to stay inside free limits
             batch = texts[start:start + 100]
-            response = self.client.models.embed_content(
-                model=self.model_name,
-                contents=batch,
-                output_dimensionality=self.dims,
-            )
+            response = None
+            for attempt in range(6):  # up to ~5 retries with exponential backoff
+                try:
+                    response = self.client.models.embed_content(
+                        model=self.model_name,
+                        contents=batch,
+                        output_dimensionality=self.dims,
+                    )
+                    break
+                except Exception as exc:
+                    if attempt == 5:
+                        raise
+                    wait = min(2 ** attempt * 5, 60) + random.uniform(0, 2)
+                    print(f"  batch {start // 100 + 1}: attempt {attempt + 1} failed "
+                          f"({type(exc).__name__}: {exc}); retrying in {wait:.0f}s")
+                    time.sleep(wait)
+            assert response is not None
             vectors.extend(e.values for e in response.embeddings)
             print(f"  embedded {min(start + 100, len(texts))}/{len(texts)}")
+            if start + 100 < len(texts):
+                time.sleep(2)  # gentle pacing between batches on the free tier
         return vectors
 
 
