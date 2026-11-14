@@ -185,11 +185,12 @@ Checked against the repo at this commit (`ingest/`, `retrieve/`, `eval/`, `docs/
 | Product profile cards (G2 advisory) | ✅ done | `ingest/profiles.py` → `build/profiles.jsonl` (38 cards across 13 robots) + `retrieve/profiles.py` (`ProfileIndex`, `SearchResult.profiles`) |
 | Picture intent & language-aware figure selection (G6 retrieval) | ✅ done | `route="figure"` in EN/DE/IT, overview diagram ranker, `Hit.labels`, EN-first cross-lingual fallback |
 | Backend API (G4 → Bonus 01) | ❌ missing | no FastAPI yet; `SearchResult.to_dict()` (with `hits`, `params`, `profiles`) is ready |
-| Answer composer + evidence validation (G5) | ❌ missing | citation/numeric/quote checks designed (§4 G5), not implemented |
-| Chat UI + HTTP media serving (G6 display) | ❌ missing | figure paths & labels are retrieved, `GET /media/...` and UI rendering still to build |
+| Answer composer + evidence validation (G5) | ✅ done | `answer/` — `gemini-2.5-flash` + offline formatter, three post-checks (citation/numeric/quote) with repair; 28-question answer benchmark: 100% grounded, 0 invented numbers, 100% answer-language match, 100% cross-lingual disclosure → [`answering.md`](answering.md) |
+| Multilingual answers (Bonus 02, answering half) | ✅ done | answer language = question language, evidence languages disclosed, values quoted from EN/DE sources for Italian questions → [`answering.md`](answering.md) |
+| Chat UI + HTTP media serving (G6 display) | ❌ missing | `Answer.figures` carries `image` + `caption` + `labels`; `GET /media/...` and UI rendering still to build |
 
-**Net:** phases 1–2 (data + retrieval) are finished and measured; phase 3 (API, answers,
-UI) is untouched. The scorecard in §7 still describes the target, not the current state.
+**Net:** data, retrieval and answering (composer + validation) are finished and measured;
+the API and the UI are what remains. The scorecard in §7 still describes the target, not the current state.
 Images are indexed and returned as metadata, but **not yet viewable** — the gap is broken down
 in §9a and is deliberately deferred, not forgotten.
 
@@ -206,9 +207,9 @@ in §9a and is deliberately deferred, not forgotten.
 5. **FastAPI backend** (G4 → Bonus 01): `GET /search`, `POST /ask`, `GET /products` over
    `SearchEngine`; `/search` returns `to_dict()` unchanged. Second client (curl/Telegram) to prove
    plug-and-play. **Adds the HTTP media endpoint (`GET /media/{doc_id}/{filename}`) from §9a.**
-6. **Answer composer + evidence validation** (G5): answer in the user's language, citation-required
-   prompt, numeric check (every number must occur in the retrieved chunks), quote check, and the
-   cited snippet + page + figure returned with the answer.
+6. ~~**Answer composer + evidence validation** (G5)~~ ✅ `answer/` — pluggable Gemini/offline
+   generation, citation + numeric + quote checks with repair and one regeneration, localized
+   answer scaffolding (EN/DE/IT), and an answer-level benchmark over the 28 questions.
 7. **Chat UI**: streaming answer, clickable citations, inline figure (needs §9a's `image_url`).
 8. **Dense layer validation**: run `embed_index` + fusion on the 28 questions, then extend the
    benchmark with paraphrase cases.

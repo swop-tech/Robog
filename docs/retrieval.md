@@ -123,12 +123,14 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 |---|---|
 | No paraphrase matching ("the robot won't start" vs "power-on failure") | dense retriever (multilingual-e5 / gemini-embedding) as another ranked list in the fusion |
 | A large troubleshooting table can outrank the focused procedure on procedural questions | acceptable while the composer reads the top-k; a dense retriever helps here too |
-| `confidence` is recall-based, not calibrated | refine together with the answer composer + evidence validation (G5) |
+| `confidence` is recall-based, not calibrated | the answer composer's evidence validation (G5) is now the hard gate; `confidence` is a soft hint |
 | Lexicon covers parameters and core scenarios, not every procedure | grows from eval misses; keep it small and explainable |
 | Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs, but nothing serves or renders the PNG over HTTP yet | `GET /media/{doc_id}/{filename}` in the FastAPI step |
 
 ## Next
 
-FastAPI (`/search`, `/ask`, `/products`) on top of `SearchEngine` → chat UI → answer composer with
-citation/numeric verification (G5). Dense retrieval is optional behind `SearchEngine`; it still needs end-to-end validation with
-a real embedding model and a larger, relevance-judged benchmark.
+~~Answer composer with citation/numeric/quote verification (G5)~~ — done, see
+[`answering.md`](answering.md): `answer/AnswerComposer` consumes `SearchResult` unchanged, so
+`result.to_dict()` stays the `/search` contract. Next: FastAPI (`/search`, `/ask`, `/products`,
+`/media/...`) → chat UI. Dense retrieval is optional behind `SearchEngine`; it still needs
+end-to-end validation with a real embedding model and a larger, relevance-judged benchmark.

@@ -10,6 +10,7 @@ source-grounded answers for both technicians and non-technical users.
 - 🧰 Stack decisions (embeddings, RAG framework, vector DB): [`docs/stack-decisions.md`](docs/stack-decisions.md)
 - 🧹 Data processing (clean, chunk, metadata, parameter index): [`docs/data-processing.md`](docs/data-processing.md)
 - 🔎 Retrieval engine (routing, language policy, evaluation): [`docs/retrieval.md`](docs/retrieval.md)
+- 💬 Answer composer + evidence validation (G5, Bonus 02): [`docs/answering.md`](docs/answering.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
   (Bonus 01), multilingual ask/answer (Bonus 02), web chat as the required interface.
@@ -22,7 +23,8 @@ source-grounded answers for both technicians and non-technical users.
 | Retrieval | Plain Python (`retrieve/`): BM25 + parameter index + product profile cards + figure route + language policy, no dependencies |
 | Embeddings | `gemini-embedding-2` (free tier) or `multilingual-e5-small` (offline) — pluggable |
 | Vector DB | Chroma (embedded) |
-| RAG framework | LlamaIndex (retrieval + answering, phase 3) |
+| Answering | `gemini-2.5-flash` (free tier) **or** the deterministic offline formatter — pluggable |
+| RAG framework | none needed: retrieval, prompting and evidence validation are ours (LlamaIndex optional) |
 | Environment | Python 3.11+, VS Code, Git — any laptop, CPU-only |
 
 ## Data processing (phase 1 — done, tested on the real dataset)
@@ -58,7 +60,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 129 tests
+python -m unittest discover -s tests -p "test_*.py"       # 202 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -90,7 +92,38 @@ python -m ingest.embed_index --provider local --reset
 
 The dense path is optional and requires a compatible built index and embedding provider.
 The local model must be downloaded before it can run offline. End-to-end embedding quality
-has not been validated by the keyword-only benchmark above. The API and answer composer remain work in progress.
+has not been validated by the keyword-only benchmark above.
+
+## Answer composer + evidence validation (phase 3 — G5 + Bonus 02)
+
+```bash
+python -m answer "Wieviel Zuladung hat der FlashBot?"          # offline, no API key needed
+python -m answer "Qual è la velocità massima del FlashBot?"    # Italian answer, sources DE/EN
+python -m answer "Zeig mir ein Bild vom FlashBot" --show-evidence
+python -m answer "Which robot fits my restaurant?" --json       # the shape POST /ask will return
+python -m answer.evaluate --out build/answer-report.md          # 28-question answer benchmark
+```
+
+`AnswerComposer` = retrieve → number the evidence → generate → **validate** → answer.
+Generation is `gemini-2.5-flash` when `GEMINI_API_KEY` is set, and the deterministic grounded
+formatter otherwise (no key, no network, no model download) — the same formatter that takes over
+if the API fails or an answer cannot be repaired. The answer is always written in the question's
+language and says so when the evidence came from another language.
+
+Every answer is post-checked before it is returned (**G5**): every factual sentence must cite a
+retrieved chunk (`[1]`, `[2]` …), every number/unit must occur in the evidence (invented values are
+removed, value *and* unit compared), and quoted text must appear verbatim in the cited source.
+Bad claims are repaired, the LLM gets one retry with the failures named, and otherwise the
+formatter answers — an unvalidated answer never reaches a caller.
+
+On the 28-question benchmark, the offline formatter scores **100%** grounded, **100%** claims
+cited, **100%** numbers verified, **0** invented numbers, **100%** answer-language match and
+**100%** cross-lingual disclosure. Details, checks and limits: [`docs/answering.md`](docs/answering.md).
+
+## Next: FastAPI (`/search`, `/ask`, `/products`) + media endpoint + chat UI
+
+`SearchResult.to_dict()` and `Answer.to_dict()` are already the response bodies for `/search` and
+`/ask`. Remaining: the FastAPI app, `GET /media/{doc_id}/{filename}`, and the chat UI.
 
 ## Known gap: images are retrieved with language-correct paths, not yet served over HTTP
 
