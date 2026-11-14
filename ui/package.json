@@ -1,0 +1,11 @@
+{
+  "name": "robog-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Telmekon AI Assistant web chat. Zero-build: plain ES modules served by FastAPI at /ui, no bundler, no framework, no CDN, no runtime dependencies. This file exists only so `node --test ui/tests` can import the modules as ESM.",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "for f in *.js; do node --check \"$f\" || exit 1; done"
+  }
+}

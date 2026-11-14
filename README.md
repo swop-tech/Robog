@@ -169,8 +169,11 @@ python -m api                         # then open http://0.0.0.0:8000 in a brows
 python -m unittest tests.test_ui -v   # 13 serving-contract tests (no browser, key or corpus)
 ```
 
-A fast, **zero-build** single-page chat (`ui/`: plain HTML + CSS + one ES module, no bundler, no
-framework, no CDN) served straight from FastAPI at `GET /`. The route is content-negotiated: a
+A fast, **zero-build** assistant UI (`ui/`: plain HTML + CSS + native ES modules, no bundler, no
+framework, no CDN) served straight from FastAPI at `GET /`. Light theme primary with a working dark
+switcher, responsive down to a phone, keyboard-navigable, and split into testable layers: `api.js`
+(the only module that talks to the network), `store.js` (conversations + settings), `render.js` and
+`markdown.js` (payload → HTML), `app.js` (the DOM). The route is content-negotiated: a
 browser gets the chat page, an API client (`curl`, `api/client.py`, `Accept: */*`) keeps the JSON
 endpoint index — so Bonus 01's contract is unchanged. The assets are a `/ui` static mount that stays
 out of `/openapi.json`, and the page keeps serving when the index is missing (degraded, not dead).
@@ -187,8 +190,24 @@ Built around the judging rubric:
   get an exact-value spec card.
 - **Verification badge** showing the citation & numeric checks (`✓ Verified · 2/2 cited · 13/13
   numbers`), expandable to rate bars and issues, plus a cross-lingual disclosure badge.
-- **Toggleable "Raw `/search` JSON" drawer** with the exact request URL, **Re-run live** and **Copy
-  JSON** — Bonus 01 proven on stage: the chat is only the first client of the retrieval service.
+- **Toggleable "Raw `/search` JSON" drawer** with the exact request URL, a `POST /ask` tab showing the
+  request sent and the response received, **Re-run live** and **Copy JSON** — Bonus 01 proven on stage:
+  the chat is only the first client of the retrieval service.
+- **Product cards** for the advisory persona (payload, dimensions, runtime, charging time, passage
+  width, environments, citation) rendered from `profiles[]` — only the fields a profile really carries.
+- **Saved conversations, settings and a live status pill**: history and preferences live in the browser
+  (`POST /ask` is stateless), evidence depth / answer language / product scope / provider / language
+  policy map onto real `AskRequest` fields, and `GET /health` drives the pill, its tooltip and a banner
+  carrying the server's own fix command when the index is missing.
+- **Nothing simulated**: features the backend does not have (streaming, server-side history, feedback,
+  a regenerate endpoint) are listed in Settings as unsupported and specified in
+  [`docs/ui-backend-gaps.md`](docs/ui-backend-gaps.md); every error path renders the API's own words.
+
+```bash
+node --test ui/tests/*.test.js                                   # 202 frontend tests, no browser
+npm install --no-save jsdom                                      # dev-only: enables the 28 DOM tests
+ROBOG_LIVE_API=http://localhost:8000 node --test ui/tests/live.test.js   # end to end, real corpus
+```
 
 Details: [`ui/README.md`](ui/README.md). This closes the last open item in
 [`docs/pipeline-review.md`](docs/pipeline-review.md) §9.

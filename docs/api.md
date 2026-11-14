@@ -12,7 +12,7 @@ python -m api                           # http://0.0.0.0:8000 — chat at /, Swa
 uvicorn api.app:app --reload            # the same app (reads .env too)
 python -m api --port 8080 --vector off  # keyword-only + a different port
 python -m unittest tests.test_api -v    # 63 tests, no API key, no network
-python -m unittest tests.test_ui -v     # 11 web-chat serving tests
+python -m unittest tests.test_ui -v     # 13 web-chat serving tests
 ```
 
 No key needed: without `GEMINI_API_KEY` the composer answers with its
@@ -80,14 +80,22 @@ at `/ui` (`html=True`), so they are cached and **stay out of `/openapi.json`** �
 the documented paths are unchanged. The page keeps serving when the index is
 missing; `/ask` then renders the `503` fix command inline.
 
-The chat (`ui/`: plain HTML + CSS + one ES module — no bundler, framework or CDN)
-is built around the rubric: starter chips for all four winning scenarios, inline
-clickable citations (manual title, section, PDF page, source snippet), inline
+The assistant (`ui/`: plain HTML + CSS + native ES modules — no bundler,
+framework or CDN) is built around the rubric: starter chips for all four winning
+scenarios, inline clickable citations (manual title, section, PDF page, source
+snippet), exact-value spec cards, product cards for the advisory route, inline
 figures with their `Labels:` legend, a verification badge (citation + numeric
-checks) and a toggleable **Raw `/search` JSON** drawer with a *Re-run live* button
-that proves Bonus 01 on stage. It calls `POST /ask` and `GET /search` in parallel
-and normalises every `image_url` to a same-origin path, so figures load behind any
-reverse proxy. Full details: [`../ui/README.md`](../ui/README.md).
+checks, neutral when nothing was checked) and a toggleable **Raw `/search` JSON**
+drawer with a *Re-run live* button that proves Bonus 01 on stage. It calls
+`POST /ask` and `GET /search` in parallel, reads `GET /health` for the status
+pill and `GET /products` for the product scope, and normalises every `image_url`
+to a same-origin path, so figures load behind any reverse proxy. Light and dark
+themes, saved conversations and the request settings live in the browser
+(`POST /ask` is stateless); what the API cannot do yet is labelled in Settings
+and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
+`api.js` (network) / `store.js` (state) / `render.js` + `markdown.js` (payload →
+HTML) / `app.js` (DOM), with 202 `node --test` cases plus an opt-in suite that
+drives a running server. Full details: [`../ui/README.md`](../ui/README.md).
 
 ## `GET /search` — standalone hybrid retrieval
 
