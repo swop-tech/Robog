@@ -153,6 +153,39 @@ def _card_min_width_cm(record: dict) -> float | None:
     return float(m.group(1).replace(",", "."))
 
 
+_DELIVERY_CUES: frozenset[str] = frozenset(
+    """
+    deliver delivery delivering deliveries liefern lieferung zustellung consegna consegnare
+    """.split()
+)
+
+_SCENARIO_CUE_SETS: tuple[frozenset[str], ...] = (
+    _CLEANING_CUES,
+    _INDUSTRIAL_CUES,
+    _FOOD_RESTAURANT_CUES,
+    _HOTEL_BUILDING_CUES,
+    _ELEVATOR_ENCLOSED_CUES,
+    _RECEPTION_SCREEN_CUES,
+    _NARROW_CUES,
+    _BUSSING_CUES,
+    _RETAIL_SUPERMARKET_CUES,
+    _DELIVERY_CUES,
+)
+
+
+def has_scenario_signal(query: str) -> bool:
+    """True when an advisory question names a use case, environment or number.
+
+    "Which robot is best?" names none of these, so every card scores the same
+    and any ranking would be arbitrary. Such a question must be answered by
+    asking for the scenario, not by listing 13 robots as if they were a choice.
+    """
+    if _KG_QUERY_RE.search(query) or _CM_QUERY_RE.search(query):
+        return True
+    tokens = set(tokenize(query))
+    return any(tokens & cues for cues in _SCENARIO_CUE_SETS)
+
+
 @dataclass
 class ProfileHit:
     record: dict

@@ -598,5 +598,34 @@ class EngineTests(unittest.TestCase):
         self.assertIn("hard_filter", CONFIGS)
 
 
+class ScenarioSignalTests(unittest.TestCase):
+    def test_generic_best_question_has_no_scenario(self):
+        from retrieve.profiles import has_scenario_signal
+
+        self.assertFalse(has_scenario_signal("which robot is best"))
+        self.assertFalse(has_scenario_signal("Welcher Roboter ist am besten?"))
+
+    def test_use_case_or_number_is_a_scenario(self):
+        from retrieve.profiles import has_scenario_signal
+
+        self.assertTrue(has_scenario_signal("Which robot fits my restaurant?"))
+        self.assertTrue(has_scenario_signal("Welcher Roboter eignet sich für ein Hotel?"))
+        self.assertTrue(has_scenario_signal("Which robot can carry 300 kg?"))
+        self.assertTrue(has_scenario_signal("which robot is best for delivery"))
+
+    def test_engine_flags_generic_advisory_and_keeps_scenario_ranking(self):
+        from pathlib import Path as _P
+        if not _P("build/chunks.jsonl").exists():
+            self.skipTest("run python -m ingest.run --data data first")
+        engine = SearchEngine.from_build()
+        generic = engine.search("which robot is best")
+        self.assertTrue(generic.needs_scenario)
+        self.assertEqual(generic.profiles, [])
+        self.assertEqual(generic.hits, [])
+        scenario = engine.search("Which robot fits my restaurant?")
+        self.assertFalse(scenario.needs_scenario)
+        self.assertTrue(scenario.profiles)
+
+
 if __name__ == "__main__":
     unittest.main()

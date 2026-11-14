@@ -666,6 +666,37 @@ class CorpusAnswerTests(unittest.TestCase):
         self.assertTrue(any("p. 40" in c["citation"] or "p. 5" in c["citation"]
                             for c in answer.citations))
 
+    def test_vague_best_robot_question_asks_for_the_use_case(self):
+        # \"Which robot is best?\" has no scenario: listing 13 robots would look
+        # like a recommendation, so the composer asks back instead.
+        answer = self.composer.answer("which robot is best")
+        self.assertEqual(answer.route, "advisory")
+        self.assertIn("Tell me the use case", answer.text)
+        self.assertEqual(answer.citations, [])
+        self.assertEqual(answer.figures, [])
+        self.assertFalse(answer.validation.checks_run)
+        self.assertTrue(any("asked back" in note for note in answer.notes), answer.notes)
+
+    def test_vague_best_robot_question_is_asked_back_in_german_and_italian(self):
+        de = self.composer.answer("Welcher Roboter ist am besten?")
+        self.assertEqual(de.language, "de")
+        self.assertIn("Einsatzort", de.text)
+        it = self.composer.answer("Quale robot è il migliore?")
+        self.assertEqual(it.language, "it")
+        self.assertIn("dove lavorerà", it.text)
+
+    def test_advisory_question_with_a_use_case_is_still_ranked(self):
+        answer = self.composer.answer("Which robot fits my restaurant?")
+        self.assertEqual(answer.route, "advisory")
+        self.assertNotIn("Tell me the use case", answer.text)
+        self.assertIn("BellaBot", answer.text)
+        self.assertTrue(answer.citations)
+
+    def test_advisory_question_with_a_load_is_still_ranked(self):
+        answer = self.composer.answer("Which robot can carry 300 kg in a factory?")
+        self.assertNotIn("Tell me the use case", answer.text)
+        self.assertIn("T300", answer.text)
+
     def test_under_specified_lookup_asks_for_the_robot_and_parameter(self):
         # The brief's technician persona asks "What's the value of this
         # parameter?": quoting whatever BM25 returns for the bare words

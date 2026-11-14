@@ -63,6 +63,18 @@ The fallback is not a stub. It renders, in the question's language:
 * product profile cards side by side for advisory questions;
 * a note when the evidence had to come from another language.
 
+### 1a. Asking back instead of ranking (advisory without a scenario)
+
+An advisory question that names no use case, environment or number — *"Which robot is best?"*,
+*"Welcher Roboter ist am besten?"* — cannot be ranked: all 13 profile cards score the same. The
+retriever now returns `needs_scenario: true` with no robots, and the composer answers in the
+question's language by asking for the use case (restaurant, hotel/elevator, cleaning, factory load,
+or a kg / cm value), the same way a lookup with no robot or parameter asks back. Questions that name a
+scenario or a value are ranked as before. The check is `retrieve.profiles.has_scenario_signal`.
+
+Limit: the offline formatter still cannot *judge* between robots. Once a scenario is given it lists the
+matching cards; it does not say which is better.
+
 ## 2. Multilingual answering (Bonus 02)
 
 The answer language is the **question's** language, detected deterministically by

@@ -172,6 +172,20 @@ class AnswerComposer:
             notes.append("asked back: question named neither a robot nor a parameter")
             return self._finish(question, draft, empty, result, language, notes, started)
 
+        # "Which robot is best?" names no use case, environment or number. Any
+        # ranking would be arbitrary, so ask for the scenario instead of listing
+        # all 13 robots as if they were a recommendation.
+        if result.route == "advisory" and result.needs_scenario:
+            draft = Draft(
+                text=text("needs_scenario", language),
+                provider="offline",
+                language=language,
+                notes=["under-specified advisory: no use case named"],
+            )
+            empty = Evidence(language=language, notes=list(result.notes))
+            notes.append("asked back: advisory question named no use case")
+            return self._finish(question, draft, empty, result, language, notes, started)
+
         if not evidence.refs:
             draft = format_answer(evidence, question=question, language=language, route=result.route)
             return self._finish(question, draft, evidence, result, language, notes, started)
