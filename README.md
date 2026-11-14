@@ -74,9 +74,13 @@ Details: [`docs/retrieval.md`](docs/retrieval.md).
 ## Embedding + indexing (phase 3 — dense layer)
 
 ```bash
-pip install -r requirements-rag.txt
-python -m ingest.embed_index --provider local    # offline, no key
-python -m ingest.embed_index --provider gemini   # needs GEMINI_API_KEY (free)
+pip install chromadb google-genai                # or: pip install -r requirements-rag.txt
+cp .env.example .env                             # add GEMINI_API_KEY=... (git-ignored)
+python -m ingest.embed_index --provider gemini   # embeds 1,351 chunks via Gemini API -> build/chroma
+python -m retrieve "robot won't start" --vector  # auto-detects Gemini provider & dims from Chroma
+
+# Offline alternative (no API key; downloads multilingual-e5-small once):
+python -m ingest.embed_index --provider local --reset
 ```
 
 The dense path is optional and requires a compatible built index and embedding provider.

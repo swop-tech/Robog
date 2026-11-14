@@ -16,14 +16,16 @@ Query embedding must match ingestion:
   prefix, this side adds ``query: ``.
 * ``gemini``  -- ``gemini-embedding-2`` at 1536 dimensions (the default Sujal's
   pipeline uses), via the free Google AI Studio tier. The key comes from the
-  ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) environment variable -- never from
-  source code.
+  ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) environment variable or ``.env``
+  file -- never from source code. Vectors below 3072 dims are L2-normalized per
+  Google's Matryoshka embedding spec so cosine distance stays exact.
 
 Configuration via environment variables (defaults match ``ingest/embed_index.py``):
 
     ROBOG_CHROMA_PATH        persisted Chroma directory   (default: build/chroma)
     ROBOG_CHROMA_COLLECTION  collection name              (default: robog)
-    ROBOG_EMBED_PROVIDER     local | gemini               (default: local)
+    ROBOG_EMBED_PROVIDER     local | gemini               (default: store metadata or local)
+    ROBOG_EMBED_MODEL        override embedding model id  (default: gemini-embedding-2 / e5)
     ROBOG_EMBED_DIMS         gemini output dims 128-3072  (default: 1536)
 
 Design rules, on purpose:
@@ -43,9 +45,14 @@ Design rules, on purpose:
 
 from __future__ import annotations
 
+import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+from .env import load_dotenv
 
 DEFAULT_CHROMA_PATH = "build/chroma"
 DEFAULT_COLLECTION = "robog"           # must match ingest/embed_index.py
@@ -57,7 +64,19 @@ E5_QUERY_PREFIX = "query: "            # e5 models need it; passages used "passa
 ENV_PATH = "ROBOG_CHROMA_PATH"
 ENV_COLLECTION = "ROBOG_CHROMA_COLLECTION"
 ENV_PROVIDER = "ROBOG_EMBED_PROVIDER"
+ENV_MODEL = "ROBOG_EMBED_MODEL"
 ENV_DIMS = "ROBOG_EMBED_DIMS"
+
+_RETRYABLE_MARKERS = (
+    "429",
+    "resource_exhausted",
+    "rate limit",
+    "quota",
+    "503",
+    "unavailable",
+    "deadline_exceeded",
+    "timed out",
+)
 
 
 class VectorStoreUnavailable(RuntimeError):
@@ -75,9 +94,101 @@ class DenseHit:
 
 
 # ---------------------------------------------------------------------------
+# Shared vector & Gemini helpers (used by both ingest and retrieve)
+# ---------------------------------------------------------------------------
+def l2_normalize(vector: list[float]) -> list[float]:
+    """Return a unit-length copy of ``vector`` (safe for zero vectors)."""
+    norm = math.sqrt(sum(float(v) * float(v) for v in vector))
+    if norm <= 0.0:
+        return [float(v) for v in vector]
+    return [float(v) / norm for v in vector]
+
+
+def resolve_gemini_api_key() -> str | None:
+    """Load ``.env`` if present and return ``GEMINI_API_KEY`` or ``GOOGLE_API_KEY``."""
+    load_dotenv()
+    key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+    return key or None
+
+
+def create_gemini_client(api_key: str | None = None):
+    """Create a ``google.genai.Client`` with clear errors when key/SDK is missing."""
+    resolved_key = (api_key or resolve_gemini_api_key() or "").strip()
+    if not resolved_key:
+        raise VectorStoreUnavailable(
+            "GEMINI_API_KEY is not set -- create a free key in Google AI Studio, "
+            "put GEMINI_API_KEY=... in .env (or export it), or use --provider local"
+        )
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise VectorStoreUnavailable(
+            "google-genai is not installed -- pip install -r requirements-rag.txt"
+        ) from exc
+    return genai.Client(api_key=resolved_key)
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in msg for marker in _RETRYABLE_MARKERS)
+
+
+def _is_model_not_found(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return "404" in msg or "not_found" in msg or ("not found" in msg and "model" in msg)
+
+
+def embed_gemini_batch(
+    client,
+    texts: list[str],
+    *,
+    model_name: str = GEMINI_MODEL,
+    dims: int = DEFAULT_DIMS,
+    task_type: str = "RETRIEVAL_QUERY",
+    max_retries: int = 4,
+    base_delay: float = 1.5,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> list[list[float]]:
+    """Embed ``texts`` with ``google-genai`` and return L2-normalized vectors.
+
+    ``output_dimensionality`` and ``task_type`` are passed via ``config=...``
+    matching ``google.genai.types.EmbedContentConfig``.
+    """
+    if not texts:
+        return []
+    config = {
+        "output_dimensionality": dims,
+        "task_type": task_type,
+    }
+    attempt = 0
+    while True:
+        try:
+            response = client.models.embed_content(
+                model=model_name,
+                contents=list(texts),
+                config=config,
+            )
+            embeddings = getattr(response, "embeddings", None) or []
+            return [l2_normalize(list(emb.values)) for emb in embeddings]
+        except Exception as exc:
+            if _is_model_not_found(exc):
+                raise VectorStoreUnavailable(
+                    f"Gemini embedding model {model_name!r} was not found ({exc}). "
+                    f"Set {ENV_MODEL}=gemini-embedding-001 or gemini-embedding-2-preview "
+                    "in .env if your Google AI Studio tier uses that model ID."
+                ) from exc
+            if attempt < max_retries and _is_retryable_error(exc):
+                sleep_fn(base_delay * (2 ** attempt))
+                attempt += 1
+                continue
+            raise VectorStoreUnavailable(f"Gemini embedding request failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # Query embedders (callables: list[str] -> list[list[float]])
 # ---------------------------------------------------------------------------
-def _local_embedder():
+def _local_embedder(model_name: str | None = None):
+    resolved_model = (model_name or LOCAL_MODEL).strip()
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
@@ -86,13 +197,17 @@ def _local_embedder():
             "pip install -r requirements-rag.txt  (or set ROBOG_EMBED_PROVIDER=gemini)"
         ) from exc
     try:
-        model = SentenceTransformer(LOCAL_MODEL)
+        model = SentenceTransformer(resolved_model)
     except Exception as exc:
-        raise VectorStoreUnavailable(f"could not load local embedding model {LOCAL_MODEL}: {exc}") from exc
+        raise VectorStoreUnavailable(
+            f"could not load local embedding model {resolved_model}: {exc}"
+        ) from exc
+
+    prefix = E5_QUERY_PREFIX if "e5" in resolved_model.lower() else ""
 
     def embed(texts: list[str]) -> list[list[float]]:
         vectors = model.encode(
-            [E5_QUERY_PREFIX + text for text in texts],
+            [prefix + text for text in texts],
             normalize_embeddings=True,
         )
         return vectors.tolist()
@@ -100,38 +215,36 @@ def _local_embedder():
     return embed
 
 
-def _gemini_embedder(dims: int):
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
-        raise VectorStoreUnavailable(
-            "GEMINI_API_KEY is not set -- create a free key in Google AI Studio "
-            "and export it, or set ROBOG_EMBED_PROVIDER=local for the offline model"
-        )
-    try:
-        from google import genai
-    except ImportError as exc:
-        raise VectorStoreUnavailable(
-            "google-genai is not installed -- pip install -r requirements-rag.txt"
-        ) from exc
-    client = genai.Client()
+def _gemini_embedder(dims: int, model_name: str | None = None):
+    resolved_model = (model_name or os.environ.get(ENV_MODEL) or GEMINI_MODEL).strip()
+    client = create_gemini_client()
 
     def embed(texts: list[str]) -> list[list[float]]:
-        response = client.models.embed_content(
-            model=GEMINI_MODEL,
-            contents=list(texts),
-            output_dimensionality=dims,
+        return embed_gemini_batch(
+            client,
+            list(texts),
+            model_name=resolved_model,
+            dims=dims,
+            task_type="RETRIEVAL_QUERY",
         )
-        return [list(embedding.values) for embedding in response.embeddings]
 
     return embed
 
 
-def make_embedder(provider: str | None = None, dims: int | None = None):
+def make_embedder(
+    provider: str | None = None,
+    dims: int | None = None,
+    *,
+    model: str | None = None,
+):
     """Build the query embedder. Returns ``(embedder, provider_name)``.
 
-    Parameters override the environment variables; no API key is ever stored
-    in code.
+    Parameters override the environment variables (loaded from ``.env`` when
+    present); no API key is ever stored in code.
     """
+    load_dotenv()
     provider_name = (provider or os.environ.get(ENV_PROVIDER, "local")).strip().lower()
+    resolved_model = (model or os.environ.get(ENV_MODEL) or "").strip() or None
     if dims is None:
         raw_dims = os.environ.get(ENV_DIMS, str(DEFAULT_DIMS))
         try:
@@ -139,11 +252,13 @@ def make_embedder(provider: str | None = None, dims: int | None = None):
         except ValueError:
             raise VectorStoreUnavailable(f"{ENV_DIMS}={raw_dims!r} is not an integer") from None
     if provider_name == "local":
-        return _local_embedder(), "local"
+        return _local_embedder(resolved_model), "local"
     if provider_name == "gemini":
         if not 128 <= dims <= 3072:
-            raise VectorStoreUnavailable(f"{ENV_DIMS}={dims} out of range (gemini-embedding-2: 128-3072)")
-        return _gemini_embedder(dims), "gemini"
+            raise VectorStoreUnavailable(
+                f"{ENV_DIMS}={dims} out of range (Gemini embeddings support 128-3072)"
+            )
+        return _gemini_embedder(dims, resolved_model), "gemini"
     raise VectorStoreUnavailable(
         f"unknown provider {provider_name!r} (expected 'local' or 'gemini')"
     )
@@ -183,18 +298,24 @@ class ChromaRetriever:
     def connect(cls, persist_dir: str | Path | None = None,
                 collection_name: str | None = None,
                 provider: str | None = None,
-                dims: int | None = None) -> "ChromaRetriever":
+                dims: int | None = None,
+                *,
+                model: str | None = None) -> "ChromaRetriever":
         """Open the existing store. Never creates anything.
 
-        Raises ``VectorStoreUnavailable`` (with the fix in the message) when the
-        store or collection does not exist yet or the provider cannot load.
+        Auto-detects ``provider``, ``model`` and ``dims`` recorded in the
+        Chroma collection metadata by ``ingest.embed_index`` when not
+        explicitly overridden, and rejects accidental provider mismatches
+        (e.g. querying a 1536-dim Gemini index with a 384-dim local model).
         """
+        load_dotenv()
         path = Path(persist_dir or os.environ.get(ENV_PATH, DEFAULT_CHROMA_PATH))
         name = collection_name or os.environ.get(ENV_COLLECTION, DEFAULT_COLLECTION)
+        hint_provider = provider or os.environ.get(ENV_PROVIDER, "gemini")
         if not path.is_dir():
             raise VectorStoreUnavailable(
                 f"no vector store at '{path}' -- run "
-                f"python -m ingest.embed_index --provider {provider or os.environ.get(ENV_PROVIDER, 'local')} first"
+                f"python -m ingest.embed_index --provider {hint_provider} first"
             )
         client = _load_client(path)
         try:
@@ -214,7 +335,37 @@ class ChromaRetriever:
             raise VectorStoreUnavailable(
                 f"collection '{name}' in '{path}' is empty -- run python -m ingest.embed_index first"
             )
-        embedder, provider_name = make_embedder(provider, dims)
+
+        stored_meta = getattr(collection, "metadata", None) or {}
+        stored_provider = str(stored_meta.get("provider") or "").strip().lower() or None
+        explicit_provider = (provider or os.environ.get(ENV_PROVIDER) or "").strip().lower() or None
+
+        if explicit_provider and stored_provider and explicit_provider != stored_provider:
+            raise VectorStoreUnavailable(
+                f"collection '{name}' in '{path}' was indexed with provider={stored_provider!r} "
+                f"(dims={stored_meta.get('dims', '?')}), cannot query with provider={explicit_provider!r} -- "
+                f"use --provider {stored_provider} (or {ENV_PROVIDER}={stored_provider}) "
+                f"or rebuild with: python -m ingest.embed_index --provider {explicit_provider} --reset"
+            )
+
+        resolved_provider = explicit_provider or stored_provider or "local"
+        resolved_dims = dims
+        if resolved_dims is None and ENV_DIMS not in os.environ and stored_meta.get("dims"):
+            try:
+                resolved_dims = int(stored_meta["dims"])
+            except (TypeError, ValueError):
+                resolved_dims = None
+
+        resolved_model = model or os.environ.get(ENV_MODEL) or None
+        if resolved_model is None and stored_meta.get("model") and (
+            not stored_provider or resolved_provider == stored_provider
+        ):
+            resolved_model = str(stored_meta["model"])
+
+        if resolved_model is not None:
+            embedder, provider_name = make_embedder(resolved_provider, resolved_dims, model=resolved_model)
+        else:
+            embedder, provider_name = make_embedder(resolved_provider, resolved_dims)
         return cls(collection, embedder, provider=provider_name, collection_name=name)
 
     @property
