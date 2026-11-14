@@ -78,15 +78,15 @@ function mapSource(raw: unknown): SourceReference | null {
 export function mapResponse(raw: unknown): Omit<AskResult, "isDemo"> {
   const obj = isObj(raw) ? raw : {};
   const answer = pickString(obj, ["answer", "response", "text", "output", "message"]);
-  const rawSources = obj.sources ?? obj.references ?? obj.citations ?? [];
+  const rawSources = obj["sources"] ?? obj["references"] ?? obj["citations"] ?? [];
   const sources = (Array.isArray(rawSources) ? rawSources : [])
     .map(mapSource)
     .filter((s): s is SourceReference => s !== null);
 
   const notFound =
-    obj.found === false ||
-    obj.insufficient_information === true ||
-    obj.status === "not_found" ||
+    obj["found"] === false ||
+    obj["insufficient_information"] === true ||
+    obj["status"] === "not_found" ||
     !answer;
 
   return {

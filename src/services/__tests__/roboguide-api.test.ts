@@ -38,13 +38,13 @@ describe("RoboGuide API service", () => {
 
   it("never invents a page number when the backend omits it", () => {
     const res = mapResponse({ answer: "10 kg", sources: [{ manual: "X6 Manual", excerpt: "Payload: 10 kg" }] });
-    expect(res.sources[0].page).toBeNull();
-    expect(res.sources[0].url).toBeNull();
+    expect(res.sources[0]?.page).toBeNull();
+    expect(res.sources[0]?.url).toBeNull();
   });
 
   it("keeps a documented page number", () => {
     const res = mapResponse({ answer: "10 kg", sources: [{ manual: "X6 Manual", page: "42" }] });
-    expect(res.sources[0].page).toBe(42);
+    expect(res.sources[0]?.page).toBe(42);
   });
 
   it("drops sources without a document name instead of showing a blank citation", () => {

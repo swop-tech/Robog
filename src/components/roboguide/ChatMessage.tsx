@@ -62,7 +62,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
           <MessageResponse className={technical ? "answer-technical" : "answer-simple"}>{message.content}</MessageResponse>
         )}
       </MessageContent>
-      {!notFound && <SourceReferences sources={message.sources ?? []} isDemo={message.isDemo} />}
+      {!notFound && <SourceReferences sources={message.sources ?? []} isDemo={message.isDemo ?? false} />}
     </Message>
   );
 }

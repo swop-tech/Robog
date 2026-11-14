@@ -3,7 +3,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { SourceReference as Source } from "@/types/chat";
 
-function SourceRow({ source, isDemo }: { source: Source; isDemo?: boolean }) {
+function SourceRow({ source, isDemo }: { source: Source; isDemo?: boolean | undefined }) {
   const [open, setOpen] = useState(false);
   return (
     <li className="rounded-md bg-background">
@@ -45,7 +45,7 @@ function SourceRow({ source, isDemo }: { source: Source; isDemo?: boolean }) {
   );
 }
 
-export function SourceReferences({ sources, isDemo }: { sources: Source[]; isDemo?: boolean }) {
+export function SourceReferences({ sources, isDemo }: { sources: Source[]; isDemo?: boolean | undefined }) {
   if (sources.length === 0) {
     return (
       <p className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">

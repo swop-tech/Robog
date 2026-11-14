@@ -54,7 +54,7 @@ export function ChatInput({ onSend, busy, mode, focusKey }: ChatInputProps) {
               <span className="hidden sm:inline">· Enter to send · Shift + Enter for a new line</span>
             </span>
             <PromptInputSubmit
-              status={busy ? "submitted" : undefined}
+              status={busy ? "submitted" : "ready"}
               disabled={!canSend}
               aria-label="Send question"
               className="rounded-lg bg-primary text-primary-foreground hover:bg-primary-strong disabled:bg-border disabled:text-muted-foreground disabled:opacity-100"

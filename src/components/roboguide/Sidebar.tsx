@@ -22,8 +22,8 @@ export function Sidebar({ mode, onModeChange, onAsk, onNewChat, busy }: SidebarP
         </Button>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto px-4 py-3">
-        <FAQSection onAsk={onAsk} disabled={busy} />
-        <QuickCategories onAsk={onAsk} disabled={busy} />
+        <FAQSection onAsk={onAsk} disabled={busy ?? false} />
+        <QuickCategories onAsk={onAsk} disabled={busy ?? false} />
       </div>
       <div className="border-t border-sidebar-border p-4">
         <ModeSwitcher value={mode} onChange={onModeChange} />

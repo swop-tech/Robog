@@ -20,13 +20,13 @@ export interface ApiConfig {
 const env = import.meta.env;
 
 export const apiConfig: ApiConfig = {
-  baseUrl: String(env.VITE_ROBOGUIDE_API_URL ?? "").replace(/\/+$/, ""),
-  askPath: String(env.VITE_ROBOGUIDE_ASK_PATH || "/ask"),
-  forceMock: env.VITE_ROBOGUIDE_MOCK === "true",
-  timeoutMs: Number(env.VITE_ROBOGUIDE_TIMEOUT_MS) || 60_000,
+  baseUrl: String(env["VITE_ROBOGUIDE_API_URL"] ?? "").replace(/\/+$/, ""),
+  askPath: String(env["VITE_ROBOGUIDE_ASK_PATH"] || "/ask"),
+  forceMock: env["VITE_ROBOGUIDE_MOCK"] === "true",
+  timeoutMs: Number(env["VITE_ROBOGUIDE_TIMEOUT_MS"]) || 60_000,
   modeValues: {
-    technical: String(env.VITE_ROBOGUIDE_MODE_TECHNICAL || "technical"),
-    "non-technical": String(env.VITE_ROBOGUIDE_MODE_NON_TECHNICAL || "non-technical"),
+    technical: String(env["VITE_ROBOGUIDE_MODE_TECHNICAL"] || "technical"),
+    "non-technical": String(env["VITE_ROBOGUIDE_MODE_NON_TECHNICAL"] || "non-technical"),
   },
 };
 
