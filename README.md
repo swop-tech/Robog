@@ -27,3 +27,14 @@ npm run dev
 - TypeScript
 - React
 - Tailwind CSS
+
+## RoboGuide AI — backend integration
+
+The frontend talks to the backend only through `src/services/roboguide-api.ts`.
+
+- **Configure** with Vite env vars (see `.env.example`): `VITE_ROBOGUIDE_API_URL`, `VITE_ROBOGUIDE_ASK_PATH`, timeout and mode values.
+- **Demo mode** runs automatically when `VITE_ROBOGUIDE_API_URL` is empty (or `VITE_ROBOGUIDE_MOCK=true`). Mock answers live in `src/services/mock-roboguide.ts`, are flagged `isDemo`, and are labelled "Demo" in the UI. Add `#error` or `#notfound` to a question to preview those states.
+- **Request** (`buildRequestBody`): `{ question, robot, mode, response_language, conversation_id }`.
+- **Response** (`mapResponse`): accepts `answer` + `sources[{ manual, page, excerpt, url, language }]` and common aliases. Missing pages/links stay empty; an empty answer or `found: false` shows the "couldn't find enough information" message.
+- **Machines, FAQs, categories, languages**: `src/config/app.ts` (sample data, easy to replace with backend data).
+- **Chat history**: browser localStorage via `src/lib/chat-store.ts`; swap its read/write functions for backend storage later.
