@@ -22,7 +22,7 @@ if `ui/` references a path outside the list above.
 | # | Feature | UI behaviour today | Backend requirement | Priority |
 |---|---|---|---|---|
 | 1 | Streaming answers | one spinner, then the whole answer (`POST /ask` is a single JSON body) | `POST /ask/stream` (SSE) | high — perceived latency |
-| 2 | Server-side conversation history | conversations live in `localStorage`, labelled as browser-only everywhere they appear | `POST /conversations`, `GET /conversations`, `GET/DELETE /conversations/{id}` | medium |
+| 2 | Server-side conversation history | conversations live in `localStorage`; `/ask` accepts up to 8 client-supplied prior user questions for follow-up resolution, but stores nothing | `POST /conversations`, `GET /conversations`, `GET/DELETE /conversations/{id}` | medium |
 | 3 | Search across conversations | the sidebar filter runs over local data only | `GET /conversations?q=` | low |
 | 4 | Answer feedback | thumbs up/down stored locally; the tooltip and the toast both say the API has no feedback endpoint | `POST /feedback` | high — it is the only way to close the quality loop |
 | 5 | Regenerate | re-issues the identical `POST /ask` (a real second request) | `POST /ask/regenerate` with cache-bypass + audit id | medium |
@@ -71,12 +71,13 @@ Notes for the implementer:
 
 ## 2. Conversation history — `/conversations`
 
-**Why it matters.** The brief's "ease of use" criterion is multi-turn. `POST
-/ask` is stateless by design, so the UI stores conversations in `localStorage`
-(key `telmekon.ui.v1`, capped at 25, oldest dropped first when the quota is
-hit). That is honest but browser-bound: nothing survives a different device or a
-cleared cache, and the UI says so in the sidebar footnote, in Settings and in the
-empty-state text.
+**Why it matters.** The brief's "ease of use" criterion is multi-turn. The UI
+stores conversations in `localStorage` (key `telmekon.ui.v1`, capped at 25,
+oldest dropped first when the quota is hit). `/ask` now accepts up to 8
+client-supplied recent user questions to resolve follow-ups, but does not persist
+or return history. Saved conversations remain browser-bound: nothing survives a
+different device or a cleared cache, and the UI says so in the sidebar footnote,
+in Settings and in the empty-state text.
 
 **Requirement.**
 

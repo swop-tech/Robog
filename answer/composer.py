@@ -145,10 +145,32 @@ class AnswerComposer:
         k: int | None = None,
         language: str | None = None,
         result: SearchResult | None = None,
+        history: list[str] | None = None,
         **search_kwargs: Any,
     ) -> Answer:
-        """Answer one question, grounded and validated."""
+        """Answer one question, grounded and validated.
+
+        Recent user turns may resolve a follow-up's product reference, but never
+        supply answer facts; all claims still come from newly retrieved evidence.
+        """
         started = time.perf_counter()
+        history = [
+            " ".join(str(turn).split())[:300]
+            for turn in (history or [])[-6:]
+            if str(turn).strip()
+        ]
+        mentioned_products = getattr(self.engine, "mentioned_products", None)
+        if not result and not search_kwargs.get("product") and callable(mentioned_products):
+            mentioned_now = mentioned_products(question)
+            if not mentioned_now:
+                # Only infer from the nearest prior question that names a product;
+                # an ambiguous comparison is not silently resolved to one side.
+                for prior in reversed(history):
+                    mentioned_before = mentioned_products(prior)
+                    if mentioned_before:
+                        if len(mentioned_before) == 1:
+                            search_kwargs["product"] = mentioned_before[0]
+                        break
         result = result or self.engine.search(question, k=k or self.k, language=language, **search_kwargs)
         evidence = Evidence.from_result(result, max_chunks=self.max_chunks)
         language = result.language or language or "en"
@@ -211,7 +233,9 @@ class AnswerComposer:
             return self._finish(question, draft, evidence, result, language, notes, started)
 
         generator = self.generator
-        prompt = build_prompt(question, evidence, language=language, route=result.route)
+        prompt = build_prompt(
+            question, evidence, language=language, route=result.route, history=history
+        )
         draft = _safe_draft(
             generator, prompt, evidence, language, result.route, question
         )
