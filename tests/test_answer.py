@@ -658,6 +658,117 @@ class GeneratorTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("forced", lines[0])
 
+    # -- a model ID the key can no longer call ---------------------------------
+    def test_retired_model_is_replaced_by_the_one_the_api_recommends(self):
+        client = _ModelAwareClient({"gemini-3.8-flash"}, errors={"gemini-2.5-flash": RETIRED_25_FLASH})
+        generator = GeminiGenerator(model="gemini-2.5-flash", client=client, sleep_fn=lambda _s: None)
+        draft = generator.draft("p", make_evidence(), language="en")
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.provider, "gemini")
+        self.assertEqual(draft.model, "gemini-3.8-flash")
+        self.assertEqual(client.calls, ["gemini-2.5-flash", "gemini-3.8-flash"])
+        self.assertEqual(client.list_calls, 0)             # the error named the replacement
+        self.assertIsNone(generator.last_error)
+        self.assertEqual(generator.requested_model, "gemini-2.5-flash")
+        self.assertEqual(generator.model, "gemini-3.8-flash")
+        self.assertIn("gemini-2.5-flash", generator.model_note)
+        self.assertIn("ROBOG_LLM_MODEL=gemini-3.8-flash", generator.model_note)
+
+    def test_replacement_is_remembered_so_only_the_first_request_pays(self):
+        client = _ModelAwareClient({"gemini-3.8-flash"}, errors={"gemini-2.5-flash": RETIRED_25_FLASH})
+        generator = GeminiGenerator(model="gemini-2.5-flash", client=client, sleep_fn=lambda _s: None)
+        generator.draft("p", make_evidence(), language="en")
+        generator.draft("p", make_evidence(), language="en")
+        self.assertEqual(client.calls, ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.8-flash"])
+
+    def test_replacement_comes_from_the_key_s_model_list_when_nothing_is_recommended(self):
+        from answer.llm import DEFAULT_LLM_MODEL
+
+        client = _ModelAwareClient(
+            {"gemini-9.5-flash"},
+            listed=[
+                "gemini-9.5-flash-image",            # generateContent, but not a chat model
+                "gemini-9.5-flash-preview-tts",
+                "gemini-9.0-flash",
+                "gemini-9.5-pro",
+                "gemini-9.5-flash",
+                "gemini-9.5-flash-lite",
+            ],
+        )
+        generator = GeminiGenerator(model="gemini-typo", client=client, sleep_fn=lambda _s: None)
+        draft = generator.draft("p", make_evidence(), language="en")
+        self.assertEqual(draft.model, "gemini-9.5-flash")
+        # default first, then the newest stable Flash; no image or preview variant is called
+        self.assertEqual(client.calls, ["gemini-typo", DEFAULT_LLM_MODEL, "gemini-9.5-flash"])
+
+    def test_no_replacement_answers_reports_the_configured_model(self):
+        from answer.llm import MAX_MODEL_REPLACEMENTS
+
+        client = _ModelAwareClient(listed=[f"gemini-{n}.0-flash" for n in range(1, 9)])
+        generator = GeminiGenerator(model="gemini-typo", client=client, sleep_fn=lambda _s: None)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertEqual(len(client.calls), 1 + MAX_MODEL_REPLACEMENTS)      # bounded
+        self.assertIn("gemini-typo", generator.last_error)
+        self.assertIn("ROBOG_LLM_MODEL", generator.last_error)
+        self.assertIsNone(generator.model_note)
+        self.assertEqual(generator.model, "gemini-typo")
+        # The search is not repeated on every request: one call, to the configured model.
+        before = len(client.calls)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertEqual(client.calls[before:], ["gemini-typo"])
+        self.assertIn("gemini-typo", generator.last_error)
+
+    def test_replacement_that_hits_a_quota_is_not_adopted(self):
+        client = _ModelAwareClient(
+            {"gemini-9.0-flash"},
+            errors={
+                "gemini-2.5-flash": RETIRED_25_FLASH,
+                "gemini-3.8-flash": "429 RESOURCE_EXHAUSTED: quota exceeded per day",
+            },
+            listed=["gemini-9.0-flash"],
+        )
+        generator = GeminiGenerator(model="gemini-2.5-flash", client=client, sleep_fn=lambda _s: None)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertEqual(client.calls, ["gemini-2.5-flash", "gemini-3.8-flash"])
+        self.assertEqual(generator.model, "gemini-2.5-flash")
+        self.assertIn("gemini-2.5-flash", generator.last_error)
+        # A quota is temporary: once it clears, the next request adopts the replacement.
+        client.working.add("gemini-3.8-flash")
+        draft = generator.draft("p", make_evidence(), language="en")
+        self.assertEqual(draft.model, "gemini-3.8-flash")
+
+    def test_other_failures_do_not_trigger_a_model_switch(self):
+        client = _ModelAwareClient(errors={"gemini-x": "429 RESOURCE_EXHAUSTED: quota exceeded per day"})
+        generator = GeminiGenerator(model="gemini-x", client=client, sleep_fn=lambda _s: None)
+        self.assertIsNone(generator.draft("p", make_evidence(), language="en"))
+        self.assertEqual(client.calls, ["gemini-x"])
+        self.assertIn("quota", generator.last_error)
+
+    def test_provider_info_names_the_replacement(self):
+        from answer.llm import describe_provider
+
+        client = _ModelAwareClient({"gemini-3.8-flash"}, errors={"gemini-2.5-flash": RETIRED_25_FLASH})
+        generator = GeminiGenerator(model="gemini-2.5-flash", client=client, sleep_fn=lambda _s: None)
+        self.assertIsNone(describe_provider(generator)["model_note"])
+        generator.draft("p", make_evidence(), language="en")
+        info = describe_provider(generator)
+        self.assertEqual(info["model"], "gemini-3.8-flash")
+        self.assertEqual(info["requested_model"], "gemini-2.5-flash")
+        self.assertIn("gemini-3.8-flash", info["model_note"])
+        self.assertIsNone(info["last_error"])
+
+    def test_check_passes_with_a_warning_when_the_model_was_replaced(self):
+        from answer.llm import check_llm
+
+        client = _ModelAwareClient({"gemini-3.8-flash"}, errors={"gemini-2.5-flash": RETIRED_25_FLASH})
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_PROVIDER": "auto"}):
+            ok, lines = check_llm("gemini-2.5-flash", client=client)
+        report = "\n".join(lines)
+        self.assertTrue(ok, report)
+        self.assertIn("warn  gemini-2.5-flash is not available", report)
+        self.assertIn("ROBOG_LLM_MODEL=gemini-3.8-flash", report)
+        self.assertIn("gemini-3.8-flash answered", report)
+
     def test_model_can_be_overridden(self):
         client = _FakeClient("ok")
         generator = GeminiGenerator(model="gemini-2.5-pro", client=client)
@@ -683,6 +794,39 @@ class _FakeClient:
     def _generate(self, *, model, contents, config=None):
         self.calls.append({"model": model, "contents": contents})
         return SimpleNamespace(text=self.text_value)
+
+
+#: The error Google returns for a retired model, as a user reported it.
+RETIRED_25_FLASH = (
+    "404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model models/gemini-2.5-flash is no "
+    "longer available to new users. Please update your code to use models/gemini-3.8-flash for the "
+    "latest features.', 'status': 'NOT_FOUND'}}"
+)
+
+
+class _ModelAwareClient:
+    """Answers for the models in ``working``; other models fail with ``errors[model]`` or a 404."""
+
+    def __init__(self, working=(), *, errors=None, listed=()):
+        self.working = set(working)
+        self.errors = dict(errors or {})
+        self.calls: list[str] = []
+        self.list_calls = 0
+        self._listed = list(listed)
+        self.models = SimpleNamespace(generate_content=self._generate, list=self._list)
+
+    def _generate(self, *, model, contents, config=None):
+        self.calls.append(model)
+        if model in self.working:
+            return SimpleNamespace(text=f"Load capacity is 20 kg [1]. ({model})")
+        raise RuntimeError(self.errors.get(model, f"404 NOT_FOUND: models/{model} is not found"))
+
+    def _list(self):
+        self.list_calls += 1
+        return [
+            SimpleNamespace(name=f"models/{name}", supported_actions=["generateContent"])
+            for name in self._listed
+        ]
 
 
 class _FailingClient:
@@ -899,6 +1043,18 @@ class ComposerTests(unittest.TestCase):
         self.assertEqual(answer.provider, "offline")
         self.assertEqual(answer.fallback_reason, "GEMINI_API_KEY not set")
         self.assertIn("selected", chosen.fallback_reason)     # not blamed on a missing key
+
+    def test_retired_model_does_not_send_the_answer_to_the_formatter(self):
+        """The reported case: ROBOG_LLM_MODEL names a model Google has retired."""
+        client = _ModelAwareClient({"gemini-3.8-flash"}, errors={"gemini-2.5-flash": RETIRED_25_FLASH})
+        generator = GeminiGenerator(model="gemini-2.5-flash", client=client, sleep_fn=lambda _s: None)
+        composer = AnswerComposer(SearchEngine([]), generator=generator)
+        answer = composer.answer("How much can the FlashBot carry?", result=self._result())
+        self.assertEqual(answer.provider, "gemini")
+        self.assertEqual(answer.model, "gemini-3.8-flash")
+        self.assertIsNone(answer.fallback_reason)
+        self.assertIn("20 kg", answer.text)
+        self.assertEqual(composer.provider_info["requested_model"], "gemini-2.5-flash")
 
     # -- small talk --------------------------------------------------------------
     def test_greeting_gets_a_greeting_not_a_manual_passage(self):

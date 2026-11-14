@@ -66,7 +66,7 @@ python -m retrieve "Wieviel Zuladung hat der FlashBot?"   # standalone CLI (Bonu
 python -m retrieve "Show me a picture of the BellaBot"    # figure route (G6)
 python -m retrieve "Which robot fits my restaurant?"      # advisory + product profile cards (G2)
 python -m retrieve.evaluate                               # 28-question benchmark
-python -m unittest discover -s tests -p "test_*.py"       # 341 tests
+python -m unittest discover -s tests -p "test_*.py"       # 350 tests
 ```
 
 Keyword retrieval with **no embedding model and no dependencies**: BM25 over the chunks, the
@@ -129,7 +129,9 @@ answer; `ROBOG_ANSWER_STRICT=1` restores the all-or-nothing rule.
 **If the chat reads like pasted manual paragraphs**, the offline formatter wrote the answer: it can
 only quote. Each such answer now says why (`fallback_reason`, shown on the chat card): no key, a
 failed Gemini call with the API's error, or a generated answer that failed the number check.
-`python -m answer --check` tests the key and model with one real call.
+`python -m answer --check` tests the key and model with one real call. A model ID the key can no
+longer call (a retired `gemini-2.5-flash` in an old `.env`) is replaced automatically by one that
+answers; `--check` and `GET /health` name the replacement.
 
 On the 28-question benchmark, the offline formatter scores **100%** grounded, **100%** claims
 cited, **100%** numbers verified, **0** invented numbers, **100%** answer-language match and
@@ -212,7 +214,7 @@ Built around the judging rubric:
   [`docs/ui-backend-gaps.md`](docs/ui-backend-gaps.md); every error path renders the API's own words.
 
 ```bash
-node --test ui/tests/*.test.js                                   # 208 frontend tests, no browser
+node --test ui/tests/*.test.js                                   # 209 frontend tests, no browser
 npm install --no-save jsdom                                      # dev-only: enables the 28 DOM tests
 ROBOG_LIVE_API=http://localhost:8000 node --test ui/tests/live.test.js   # end to end, real corpus
 ```
