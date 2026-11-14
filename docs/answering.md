@@ -72,6 +72,14 @@ question's language by asking for the use case (restaurant, hotel/elevator, clea
 or a kg / cm value), the same way a lookup with no robot or parameter asks back. Questions that name a
 scenario or a value are ranked as before. The check is `retrieve.profiles.has_scenario_signal`.
 
+### 1c. No robot and no parameter named: suggest, don't stop
+
+"What is the value of this parameter?" used to end with "which robot?". Now the answer lists what the
+data covers -- the parameters the manuals document most often (from `build/params.jsonl`), the robots and
+accessories it can quote, and two example questions it can answer right away. The message is built only
+from the indexes (`answer/suggest.py`), in the question's language. German "Wie ist der Wert ...?" is now
+routed as a lookup as well.
+
 ### 1b. Hard constraints before the shortlist
 
 Advisory answers now apply facts stated in the question before they show any robot:
