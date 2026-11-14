@@ -53,6 +53,10 @@ class ServiceStatus:
     provider: dict
     vector: str | None
     detail: str | None = None
+    #: True only when a Chroma index is actually attached and being fused.
+    vector_active: bool = False
+    #: Why dense retrieval is not active (``None`` when it is, or when it is off).
+    vector_detail: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +69,8 @@ class ServiceStatus:
             "media_files": self.media_files,
             "provider": self.provider,
             "vector": self.vector,
+            "vector_active": self.vector_active,
+            "vector_detail": self.vector_detail,
             "detail": self.detail,
         }
 
@@ -103,13 +109,16 @@ class RobogService:
         """
         load_dotenv()
         media = MediaStore.build(settings.data_dir)
+        retriever, vector_note = _connect_vector(settings)
         try:
             engine = SearchEngine.from_build(
                 settings.chunks_path,
                 settings.params_path,
                 profiles_path=settings.profiles_path,
-                vector=_connect_vector(settings),
+                vector=retriever,
             )
+            if vector_note:
+                engine.retriever_note = vector_note
         except SystemExit as exc:  # from_build exits when chunks.jsonl is missing
             engine, error = None, str(exc)
         except Exception as exc:  # a broken index must not take the API down
@@ -401,6 +410,12 @@ class RobogService:
             provider=self.provider_info(),
             vector=self.settings.vector,
             detail=self.error,
+            vector_active=bool(engine is not None and engine.retriever is not None),
+            vector_detail=(
+                (getattr(engine, "retriever_note", None) or None)
+                if engine is not None and engine.retriever is None and self.settings.vector
+                else None
+            ),
         )
 
     # -- catalog helpers ---------------------------------------------------
@@ -525,15 +540,20 @@ def _read_chunk_metadata(path: Path) -> list[dict]:
     return chunks
 
 
-def _connect_vector(settings: Settings) -> ChromaRetriever | None:
+def _connect_vector(settings: Settings) -> tuple[ChromaRetriever | None, str | None]:
+    """``(retriever, note)``: the dense retriever, or why there is none.
+
+    Never raises -- keyword retrieval keeps working; ``/health`` reports the
+    note as ``vector_detail`` so a keyword-only server is never a silent one.
+    """
     if not settings.vector:
-        return None
+        return None, None
     try:
-        return ChromaRetriever.connect()
-    except VectorStoreUnavailable:
-        return None  # keyword retrieval keeps working; /health says so
-    except Exception:
-        return None
+        return ChromaRetriever.connect(), None
+    except VectorStoreUnavailable as exc:
+        return None, f"dense retrieval disabled: {exc}"
+    except Exception as exc:
+        return None, f"dense retrieval disabled: unexpected {type(exc).__name__}: {exc}"
 
 
 def _param_row(hit: ParamHit) -> dict:

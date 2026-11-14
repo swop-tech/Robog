@@ -583,6 +583,69 @@ class DegradedModeTest(unittest.TestCase):
                         "ROBOG_API_CORS_ORIGINS", "ROBOG_API_PORT"):
                 os.environ.pop(key, None)
 
+    def test_dense_retrieval_is_on_by_default_and_can_be_switched_off(self) -> None:
+        """``uvicorn api.app:app`` must fuse Chroma without any extra flag."""
+        from unittest.mock import patch
+
+        with patch("api.config.load_dotenv", return_value=None):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("ROBOG_API_VECTOR", None)
+                self.assertEqual(Settings.from_env().vector, "auto")
+            for off in ("off", "none", "0", "false", "OFF"):
+                with patch.dict(os.environ, {"ROBOG_API_VECTOR": off}, clear=False):
+                    self.assertIsNone(Settings.from_env().vector)
+
+    def test_from_env_loads_dotenv_before_reading_the_settings(self) -> None:
+        """Plain uvicorn skips ``python -m api``; ``.env`` must still apply."""
+        from unittest.mock import patch
+
+        def fake_dotenv(*_args, **_kwargs):
+            os.environ["ROBOG_API_PORT"] = "8123"
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ROBOG_API_PORT", None)
+            with patch("api.config.load_dotenv", side_effect=fake_dotenv):
+                self.assertEqual(Settings.from_env().port, 8123)
+
+    def test_health_says_why_dense_retrieval_is_not_active(self) -> None:
+        from unittest.mock import patch
+
+        tmp = Path(tempfile.mkdtemp(prefix="robog-novec-"))
+        try:
+            data = FIXTURE
+            chunks = build_index(data, tmp / "build")
+            env = {"ROBOG_CHROMA_PATH": str(tmp / "no-chroma-here")}
+            with patch.dict(os.environ, env, clear=False):
+                on = RobogService.from_settings(make_settings(data, chunks, vector="auto"))
+                off = RobogService.from_settings(make_settings(data, chunks))
+            status = on.status().to_dict()
+            self.assertTrue(status["ready"])  # keyword retrieval is unaffected
+            self.assertEqual(status["vector"], "auto")
+            self.assertFalse(status["vector_active"])
+            self.assertIn("dense retrieval disabled", status["vector_detail"])
+            status = off.status().to_dict()
+            self.assertFalse(status["vector_active"])
+            self.assertIsNone(status["vector_detail"])  # off on purpose: nothing to explain
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_health_reports_an_attached_vector_store(self) -> None:
+        from unittest.mock import patch
+
+        tmp = Path(tempfile.mkdtemp(prefix="robog-vec-"))
+        try:
+            data = FIXTURE
+            chunks = build_index(data, tmp / "build")
+            retriever = object()
+            with patch("api.service.ChromaRetriever.connect", return_value=retriever):
+                svc = RobogService.from_settings(make_settings(data, chunks, vector="auto"))
+            self.assertIs(svc.engine.retriever, retriever)
+            status = svc.status().to_dict()
+            self.assertTrue(status["vector_active"])
+            self.assertIsNone(status["vector_detail"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 # ---------------------------------------------------------------------------
 # the real corpus (skipped when data/ is absent)

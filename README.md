@@ -13,6 +13,8 @@ source-grounded answers for both technicians and non-technical users.
 - 💬 Answer composer + evidence validation (G5, Bonus 02): [`docs/answering.md`](docs/answering.md)
 - 🔌 FastAPI backend (`/search`, `/ask`, `/products`, `/media`): [`docs/api.md`](docs/api.md)
 - 🖥️ Web chat UI (`ui/`, served at `GET /`): [`ui/README.md`](ui/README.md)
+- 🧭 Judge briefing + demo script (implemented vs pending): [`docs/judge_explanation.md`](docs/judge_explanation.md), [`docs/judge_demo_script.md`](docs/judge_demo_script.md)
+- 🧠 Vector database from zero + the Gemini → Chroma run: [`docs/vector_database_explanation.md`](docs/vector_database_explanation.md), [`docs/gemini_chromadb_explanation.md`](docs/gemini_chromadb_explanation.md)
 - 📦 Dataset layout: [`data/README.md`](data/README.md)
 - 🎯 Approach: hybrid RAG + structured parameter index, retrieval engine exposed as an API
   (Bonus 01), multilingual ask/answer (Bonus 02), web chat as the required interface.
@@ -129,6 +131,8 @@ cited, **100%** numbers verified, **0** invented numbers, **100%** answer-langua
 pip install -r requirements-api.txt
 python -m ingest.run --data data      # once: build/chunks.jsonl + params + profiles
 python -m api                         # http://0.0.0.0:8000 — chat at /, Swagger at /docs
+uvicorn api.app:app --reload          # same app; fuses build/chroma automatically when it exists
+curl -s localhost:8000/health         # vector_active + provider: is this hybrid + Gemini, or the offline floor?
 
 curl 'localhost:8000/search?q=Wieviel+Zuladung+hat+der+FlashBot%3F&k=3'   # Bonus 01
 curl -X POST localhost:8000/ask -H 'content-type: application/json' \
