@@ -565,5 +565,136 @@ class IndexAndCollectionMetadataTests(unittest.TestCase):
                 self.assertIn("provider='gemini'", str(ctx.exception))
 
 
+class RateLimitAndResumeTests(unittest.TestCase):
+    def test_token_rate_limiter_paces_sliding_minute_window(self):
+        from ingest.embed_index import TokenRateLimiter
+
+        now = [100.0]
+        sleeps: list[float] = []
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(round(seconds, 2))
+            now[0] += seconds
+
+        limiter = TokenRateLimiter(1_000, clock=lambda: now[0], sleep_fn=fake_sleep)
+        self.assertEqual(limiter.acquire(600), 0.0)
+        now[0] += 10.0  # t=110.0, 600 used in window
+        slept = limiter.acquire(600)  # 600 + 600 > 1000 -> waits until t=160.5
+        self.assertAlmostEqual(slept, 50.5, places=1)
+        self.assertEqual(len(sleeps), 1)
+
+    def test_honours_google_retry_in_seconds_and_stops_on_daily_quota(self):
+        from retrieve.vector import embed_gemini_batch
+
+        sleeps: list[float] = []
+        client = _StrictGenAIClient(
+            fail_times=1,
+            fail_error=RuntimeError("429 RESOURCE_EXHAUSTED: Quota exceeded. Please retry in 42.5s."),
+        )
+        # Clear fail_error once fail_times drops to 0 so second attempt succeeds
+        orig_embed = client.models.embed_content
+
+        def _fail_once(*, model, contents, config=None):
+            if client.models.fail_times <= 0:
+                client.models.fail_error = None
+            return orig_embed(model=model, contents=contents, config=config)
+
+        client.models.embed_content = _fail_once
+        vectors = embed_gemini_batch(client, ["chunk"], dims=128, sleep_fn=sleeps.append)
+        self.assertEqual(len(vectors), 1)
+        self.assertEqual(sleeps, [44.5])  # 42.5s advised + 2.0s safety margin
+
+        daily_sleeps: list[float] = []
+        daily_client = _StrictGenAIClient(
+            fail_error=RuntimeError("429 RESOURCE_EXHAUSTED: EmbedContentRequestsPerDayPerUser")
+        )
+        with self.assertRaises(VectorStoreUnavailable) as ctx:
+            embed_gemini_batch(daily_client, ["chunk"], dims=128, sleep_fn=daily_sleeps.append)
+        self.assertEqual(daily_sleeps, [], "daily quota exhaustion must not sleep")
+        self.assertIn("daily", str(ctx.exception).lower())
+
+    def test_incremental_checkpoint_and_resume_skips_completed_chunks(self):
+        from ingest.embed_index import GeminiEmbedder, index_chunks
+
+        class _CheckpointCollection:
+            def __init__(self, name: str, metadata: dict):
+                self.name = name
+                self.metadata = dict(metadata)
+                self.rows: dict[str, dict] = {}
+
+            def count(self) -> int:
+                return len(self.rows)
+
+            def get(self, include=None):
+                return {"ids": list(self.rows.keys())}
+
+            def upsert(self, *, ids, documents, metadatas, embeddings):
+                for cid, doc, meta, emb in zip(ids, documents, metadatas, embeddings):
+                    self.rows[cid] = {"doc": doc, "meta": meta, "emb": emb}
+
+        class _CheckpointClient:
+            def __init__(self):
+                self.colls: dict[str, _CheckpointCollection] = {}
+
+            def get_collection(self, name: str):
+                if name not in self.colls:
+                    raise ValueError("missing")
+                return self.colls[name]
+
+            def delete_collection(self, name: str):
+                self.colls.pop(name, None)
+
+            def get_or_create_collection(self, name: str, metadata: dict):
+                if name not in self.colls:
+                    self.colls[name] = _CheckpointCollection(name, metadata)
+                return self.colls[name]
+
+        chroma = _CheckpointClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks_file = Path(tmp) / "chunks.jsonl"
+            chunks_file.write_text(
+                "\n".join(json.dumps(r) for r in ROWS) + "\n",
+                encoding="utf-8",
+            )
+            # Simulate a run that succeeds on batch 1 (2 rows) and crashes on batch 2
+            call_count = [0]
+            first_client = _StrictGenAIClient()
+            real_call = first_client.models.embed_content
+
+            def _crash_second_batch(*, model, contents, config=None):
+                call_count[0] += 1
+                if call_count[0] == 2:
+                    raise RuntimeError("429 RESOURCE_EXHAUSTED: EmbedContentRequestsPerDayPerUser")
+                return real_call(model=model, contents=contents, config=config)
+
+            first_client.models.embed_content = _crash_second_batch
+            embedder_1 = GeminiEmbedder(
+                dims=128, batch_size=2, tpm_limit=0, client=first_client, sleep_fn=lambda _: None
+            )
+            with self.assertRaises(SystemExit):
+                index_chunks(
+                    chunks_file, Path(tmp) / "chroma",
+                    provider="gemini", dims=128, batch_size=2,
+                    embedder=embedder_1, chroma_client=chroma,
+                )
+
+            # First 2 chunks are ALREADY persisted in Chroma despite batch 2 failing!
+            self.assertEqual(chroma.colls["robog"].count(), 2)
+
+            # Re-running resumes cleanly and ONLY embeds the 1 remaining chunk!
+            second_client = _StrictGenAIClient()
+            embedder_2 = GeminiEmbedder(
+                dims=128, batch_size=2, tpm_limit=0, client=second_client, sleep_fn=lambda _: None
+            )
+            total = index_chunks(
+                chunks_file, Path(tmp) / "chroma",
+                provider="gemini", dims=128, batch_size=2,
+                embedder=embedder_2, chroma_client=chroma,
+            )
+            self.assertEqual(total, 3)
+            self.assertEqual(len(second_client.models.calls), 1)
+            self.assertEqual(len(second_client.models.calls[0]["contents"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

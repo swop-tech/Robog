@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,7 @@ ENV_COLLECTION = "ROBOG_CHROMA_COLLECTION"
 ENV_PROVIDER = "ROBOG_EMBED_PROVIDER"
 ENV_MODEL = "ROBOG_EMBED_MODEL"
 ENV_DIMS = "ROBOG_EMBED_DIMS"
+ENV_TPM = "ROBOG_EMBED_TPM"
 
 _RETRYABLE_MARKERS = (
     "429",
@@ -76,6 +78,12 @@ _RETRYABLE_MARKERS = (
     "unavailable",
     "deadline_exceeded",
     "timed out",
+)
+_QUOTA_MARKERS = ("429", "resource_exhausted", "rate limit", "quota")
+_DAILY_QUOTA_MARKERS = ("perday", "per_day", "requests per day", "daily limit")
+_RETRY_AFTER_RE = re.compile(
+    r"(?:retry\s+in|retrydelay['\":\s]+)\s*(\d+(?:\.\d+)?)\s*s",
+    re.IGNORECASE,
 )
 
 
@@ -128,9 +136,32 @@ def create_gemini_client(api_key: str | None = None):
     return genai.Client(api_key=resolved_key)
 
 
+def _is_daily_quota_error(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in msg for marker in _DAILY_QUOTA_MARKERS)
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in msg for marker in _QUOTA_MARKERS)
+
+
 def _is_retryable_error(exc: Exception) -> bool:
+    if _is_daily_quota_error(exc):
+        return False
     msg = f"{type(exc).__name__}: {exc}".lower()
     return any(marker in msg for marker in _RETRYABLE_MARKERS)
+
+
+def _parse_retry_after_seconds(exc: Exception) -> float | None:
+    """Extract server-advised wait time (e.g. ``Please retry in 42.5s``)."""
+    match = _RETRY_AFTER_RE.search(str(exc))
+    if not match:
+        return None
+    try:
+        return max(0.0, float(match.group(1)))
+    except ValueError:
+        return None
 
 
 def _is_model_not_found(exc: Exception) -> bool:
@@ -147,12 +178,16 @@ def embed_gemini_batch(
     task_type: str = "RETRIEVAL_QUERY",
     max_retries: int = 4,
     base_delay: float = 1.5,
+    quota_retry_seconds: float | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list[list[float]]:
     """Embed ``texts`` with ``google-genai`` and return L2-normalized vectors.
 
     ``output_dimensionality`` and ``task_type`` are passed via ``config=...``
-    matching ``google.genai.types.EmbedContentConfig``.
+    matching ``google.genai.types.EmbedContentConfig``. When the free-tier
+    per-minute token limit (30,000 TPM) returns ``429 RESOURCE_EXHAUSTED``,
+    this honours Google's ``retry in Xs`` delay (or ``quota_retry_seconds``
+    during bulk indexing) so the rolling 60-second window resets cleanly.
     """
     if not texts:
         return []
@@ -177,8 +212,26 @@ def embed_gemini_batch(
                     f"Set {ENV_MODEL}=gemini-embedding-001 or gemini-embedding-2-preview "
                     "in .env if your Google AI Studio tier uses that model ID."
                 ) from exc
+            if _is_daily_quota_error(exc):
+                raise VectorStoreUnavailable(
+                    f"Gemini daily free-tier quota reached ({exc}). "
+                    "Already-saved batches remain in Chroma -- re-run later to resume, "
+                    "or run with --provider local for offline indexing."
+                ) from exc
             if attempt < max_retries and _is_retryable_error(exc):
-                sleep_fn(base_delay * (2 ** attempt))
+                advised = _parse_retry_after_seconds(exc)
+                if advised is not None:
+                    wait_s = advised + 2.0
+                elif quota_retry_seconds is not None and _is_quota_error(exc):
+                    wait_s = quota_retry_seconds
+                else:
+                    wait_s = base_delay * (2 ** attempt)
+                if wait_s >= 10.0:
+                    print(
+                        f"  rate limit hit (free-tier TPM window) -- waiting {wait_s:.1f}s "
+                        f"before retry {attempt + 1}/{max_retries}..."
+                    )
+                sleep_fn(wait_s)
                 attempt += 1
                 continue
             raise VectorStoreUnavailable(f"Gemini embedding request failed: {exc}") from exc
