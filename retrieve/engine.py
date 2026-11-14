@@ -199,6 +199,7 @@ class SearchEngine:
         # Chroma's ranked list into the same RRF fusion.
         self.retriever = retriever
         self.retriever_note: str | None = None
+        self.params_note: str | None = None
 
         # Section title is repeated into the indexed text (a small but real
         # boost: the heading names the topic better than the body prose).
@@ -249,6 +250,9 @@ class SearchEngine:
         with chunks_file.open(encoding="utf-8") as fh:
             chunks = [json.loads(line) for line in fh if line.strip()]
         engine = cls(chunks, ParamIndex.from_jsonl(params_path))
+        if not Path(params_path).exists():
+            engine.params_note = (f"parameter index not found: {params_path}; "
+                                  "exact parameter lookup disabled -- run python -m ingest.run")
         if vector is None:
             return engine
         if isinstance(vector, str):
@@ -506,6 +510,8 @@ class SearchEngine:
             return SearchResult(query, detected, routed.kind, routed.reason, "empty query")
 
         notes: list[str] = []
+        if self.params_note:
+            notes.append(self.params_note)
         if detected and products and detected not in available:
             notes.append(
                 f"no {detected.upper()} manual for {', '.join(products)} "
