@@ -232,6 +232,36 @@ class EngineFusionTests(unittest.TestCase):
         self.assertIsNone(engine.retriever)
         self.assertIn("dense retrieval disabled", engine.retriever_note or "")
 
+class FilterRegressionTests(unittest.TestCase):
+    def test_finds_allowed_result_beyond_initial_candidates(self):
+        rows = [_row(f"other-{i}", "payload", product="Other") for i in range(100)]
+        rows.append(_row("wanted", "unrelated words", product="Wanted"))
+        hits = _retriever(rows).search("payload", k=1, allowed_ids={"wanted"})
+        self.assertEqual([hit.chunk_id for hit in hits], ["wanted"])
+
+
+class RealChromaIntegrationTests(unittest.TestCase):
+    def test_persistent_store_and_engine_with_deterministic_embeddings(self):
+        try:
+            import chromadb
+        except ImportError:
+            self.skipTest("install chromadb to run the real-store integration test")
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            client = chromadb.PersistentClient(path=tmp)
+            collection = client.create_collection(name="robog", metadata={"hnsw:space": "cosine"})
+            collection.add(ids=[r["id"] for r in ROWS],
+                           documents=[r["text"] for r in ROWS],
+                           metadatas=[r["metadata"] for r in ROWS],
+                           embeddings=FakeEmbedder().embed([r["text"] for r in ROWS]))
+            with patch("retrieve.vector.make_embedder", return_value=(FakeEmbedder().embed, "fake")):
+                retriever = ChromaRetriever.connect(persist_dir=tmp)
+            hits = retriever.search("payload", k=2, allowed_ids={"de-payload"})
+            self.assertEqual([hit.chunk_id for hit in hits], ["de-payload"])
+            engine = SearchEngine(ROWS, ParamIndex([]), retriever=retriever)
+            result = engine.search("payload kg", k=3, language="en")
+            self.assertTrue(any("vector" in h.sources for h in result.hits))
+
 
 if __name__ == "__main__":
     unittest.main()

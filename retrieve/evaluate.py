@@ -124,7 +124,7 @@ def evaluate(engine: SearchEngine, questions: list[dict], k: int = 8, config: st
 
         products = len({hit.product for hit in hits})
         min_products = expect.get("min_products", 0)
-        passed = bool(rank) if expect.get("keywords") or expect.get("chunk_type") else products >= min_products
+        passed = bool(rank) if expect.get("keywords") or expect.get("chunk_type") or expect.get("product") else products >= min_products
 
         # cross-language duplicates: same translation group, different language
         seen_groups: dict[str, str] = {}
@@ -141,8 +141,17 @@ def evaluate(engine: SearchEngine, questions: list[dict], k: int = 8, config: st
         if expect.get("expect_param"):
             param_keywords = expect.get("keywords", [])
             param_hit = any(
-                _matches(f"{p.parameter} {p.value}", param_keywords) for p in search.params
+                _matches(f"{p.parameter} {p.value}", param_keywords)
+                and (not expect.get("product") or p.record.get("product") == expect["product"])
+                for p in search.params
             )
+
+        # Passage relevance, exact-parameter expectations and cross-language
+        # requirements are separate checks; a hit alone must not pass them.
+        if param_hit is not None:
+            passed = passed and param_hit
+        if "expect_cross_lingual" in expect:
+            passed = passed and search.cross_lingual == expect["expect_cross_lingual"]
 
         result.results.append(
             QuestionResult(
@@ -172,7 +181,7 @@ def render(results: dict[str, ConfigResult], k: int, verbose: bool = False) -> s
         f"> {len(next(iter(results.values())).results)} questions, k={k}, "
         "no embedding model needed (`python -m retrieve.evaluate`).",
         "",
-        "| Configuration | Recall@k | MRR | Hits in question language | Cross-language duplicates | Param index hit |",
+        "| Configuration | Pass@k | MRR | Hits in question language | Cross-language duplicates | Param index hit |",
         "|---|---|---|---|---|---|",
     ]
     for name, result in results.items():
@@ -182,13 +191,16 @@ def render(results: dict[str, ConfigResult], k: int, verbose: bool = False) -> s
         )
     lines += [
         "",
+        "Pass rate checks the annotated keywords/product/type and, where specified, parameter and cross-language expectations. "
+        "Advisory cases only check product diversity; keyword matches do not prove answer correctness.",
+        "",
         "*Cross-language duplicates*: share of returned chunks that repeat a passage "
         "already returned in another language -- exactly the top-k dilution the "
         "language policy exists to prevent.",
         "",
         "## Per question (policy)",
         "",
-        "| id | question | lang | route | first correct hit | same-lang | confidence | ok |",
+        "| id | question | lang | route | first matching hit | same-lang | confidence | ok |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in results["policy"].results:
