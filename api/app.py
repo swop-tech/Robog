@@ -38,14 +38,21 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from answer.llm import DEFAULT_LLM_MODEL
 from retrieve.lang import LANGUAGES
 
-from .config import API_DESCRIPTION, API_TITLE, API_VERSION, Settings
+from .config import API_DESCRIPTION, API_TITLE, API_VERSION, REPO_ROOT, Settings
 from .service import MAX_QUESTION_CHARS, RobogService, ServiceUnavailable
+
+#: The zero-build web chat (``ui/``): plain HTML + CSS + one ES module, served
+#: straight from FastAPI. ``GET /`` returns it to a browser; ``/ui`` serves the
+#: assets. No bundler, no node_modules, no build step -- see ``ui/README.md``.
+UI_DIR = REPO_ROOT / "ui"
+UI_INDEX = UI_DIR / "index.html"
 
 #: The corpus is EN/DE/IT (``retrieve.lang.LANGUAGES``).
 Language = Literal["en", "de", "it"]
@@ -135,13 +142,27 @@ def create_app(
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     # -- index + health ----------------------------------------------------
-    @app.get("/", tags=["meta"], summary="Endpoint index")
-    async def index(request: Request) -> dict:
+    @app.get(
+        "/",
+        tags=["meta"],
+        summary="Web chat (browser) or endpoint index (API client)",
+        response_model=None,
+    )
+    async def index(request: Request) -> Any:
+        # One URL, two representations. A browser navigating here sends
+        # ``Accept: text/html,...`` and gets the zero-build chat UI; an API
+        # client (curl, ``api/client.py``, ``Accept: */*`` or JSON) keeps the
+        # machine-readable endpoint index it was written against.
+        if _wants_html(request) and UI_INDEX.is_file():
+            return FileResponse(
+                UI_INDEX, media_type="text/html", headers={"Cache-Control": "no-cache"}
+            )
         base = _base_url(request)
         return {
             "name": API_TITLE,
             "version": API_VERSION,
             "docs": f"{base}/docs",
+            "chat": f"{base}/  (open in a browser, or send Accept: text/html)",
             "endpoints": {
                 "GET /search": f"{base}/search?q=Which robot fits my restaurant%3F&k=5",
                 "POST /ask": f'{base}/ask  (JSON body: {{"question": "..."}})',
@@ -297,12 +318,30 @@ def create_app(
         "/media/{doc_id}/{filename}", media, methods=["HEAD"], include_in_schema=False
     )
 
+    # -- the web chat's static assets (``/ui``) ----------------------------
+    # A Starlette mount, not an API route: it serves ``ui/index.html`` at
+    # ``/ui/`` and the CSS/JS next to it, and stays out of ``/openapi.json``.
+    # ``GET /`` hands a browser the same ``index.html`` (content negotiation).
+    if UI_DIR.is_dir():
+        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+
     return app
 
 
 def _base_url(request: Request) -> str:
     """Origin the client used, so ``image_url``s are absolute and proxy-correct."""
     return str(request.base_url).rstrip("/")
+
+
+def _wants_html(request: Request) -> bool:
+    """True when the caller is a browser asking for a page, not an API client.
+
+    Browsers navigating send ``Accept: text/html,application/xhtml+xml,...``;
+    curl and the stdlib client send ``*/*`` (or nothing). Only an explicit HTML
+    preference gets the chat page, so the JSON endpoint index is unchanged for
+    every client written against it.
+    """
+    return "text/html" in request.headers.get("accept", "").lower()
 
 
 def __getattr__(name: str):

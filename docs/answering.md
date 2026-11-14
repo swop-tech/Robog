@@ -186,5 +186,6 @@ Re-run and regenerate: `python -m answer.evaluate --out build/answer-report.md`
 ~~FastAPI (`/search`, `/ask`, `/products`, `/media/{doc_id}/{filename}`)~~ — done, see
 [`api.md`](api.md): `POST /ask` answers with `Answer.to_dict()` (the contract above, plus `params`
 and a compact `verification`), `GET /search` with `SearchResult.to_dict()`, and every citation and
-figure carries a fetchable `image_url`. Remaining: the chat UI with streaming answers, clickable
-citations and inline figures.
+figure carries a fetchable `image_url`. The web chat (`ui/`, served at `GET /`) now renders all of
+it — clickable citations, inline figures with their `Labels:` legend, the verification badge and a
+live Raw `/search` JSON drawer; see [`../ui/README.md`](../ui/README.md). Streaming remains future polish.

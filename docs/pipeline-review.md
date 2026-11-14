@@ -188,12 +188,12 @@ Checked against the repo at this commit (`ingest/`, `retrieve/`, `eval/`, `docs/
 | Answer composer + evidence validation (G5) | ✅ done | `answer/` — `gemini-2.5-flash` + offline formatter, three post-checks (citation/numeric/quote) with repair; 28-question answer benchmark: 100% grounded, 0 invented numbers, 100% answer-language match, 100% cross-lingual disclosure → [`answering.md`](answering.md) |
 | Multilingual answers (Bonus 02, answering half) | ✅ done | answer language = question language, evidence languages disclosed, values quoted from EN/DE sources for Italian questions → [`answering.md`](answering.md) |
 | HTTP media serving (G6 display) | ✅ done | `GET /media/{doc_id}/{filename}` serves all 476 PNGs, path-traversal safe + cached; hits/citations/figures carry `image_url` |
-| Chat UI | ❌ missing | the last open item: streaming answers, clickable citations, inline figures |
+| Chat UI | ✅ done | `ui/` served at `GET /` (zero-build HTML/CSS/ES module): starter chips for all 4 scenarios, clickable citations, inline figures + `Labels:` legend, verification badge, live Raw `/search` JSON drawer → [`../ui/README.md`](../ui/README.md) |
 
-**Net:** data, retrieval, answering (composer + validation) and the API — including HTTP media
-serving — are finished and measured; **the chat UI is what remains**. Images are indexed, returned
-with an absolute `image_url` and served by `GET /media/...`; the §9a gap is closed except for UI
-rendering.
+**Net:** data, retrieval, answering (composer + validation), the API — including HTTP media
+serving — **and the web chat** are finished and measured. Images are indexed, returned with an
+absolute `image_url`, served by `GET /media/...` and rendered inline by the chat; the §9a gap is
+fully closed. Remaining polish: an SSE/streaming `/ask` variant and end-to-end dense-layer validation.
 
 ## 9. Next steps (in order)
 
@@ -212,7 +212,10 @@ rendering.
 6. ~~**Answer composer + evidence validation** (G5)~~ ✅ `answer/` — pluggable Gemini/offline
    generation, citation + numeric + quote checks with repair and one regeneration, localized
    answer scaffolding (EN/DE/IT), and an answer-level benchmark over the 28 questions.
-7. **Chat UI**: streaming answer, clickable citations, inline figure (needs §9a's `image_url`).
+7. ~~**Chat UI**~~ ✅ `ui/` served at `GET /` — zero-build single-page chat with starter chips for
+   all 4 scenarios, clickable citations (title/section/PDF page/snippet), inline figures + `Labels:`
+   legend, verification badge and a live Raw `/search` JSON drawer → [`../ui/README.md`](../ui/README.md).
+   (Streaming is future polish; the chat renders the validated answer on completion.)
 8. **Dense layer validation**: run `embed_index` + fusion on the 28 questions, then extend the
    benchmark with paraphrase cases.
 9. **Pitch narrative**: *"the right technique per question type, every claim checkable."*
@@ -250,4 +253,5 @@ figure, and one eval question (e.g. `L09`/`L10`) asserts an image path exists in
 **Status: met** — `tests/test_api.py::CorpusApiTest` asserts all of it over HTTP on the real corpus:
 every figure hit has an `image_url` that answers `200 image/png`, `"Zeig mir ein Bild vom BellaBot"`
 returns a `de-…` figure and `"Mostrami una foto del BellaBot"` an `it-…` one, and Italian + FlashBot
-(no IT manual) falls back to `en-…` with `cross_lingual: true`. Only UI rendering is left.
+(no IT manual) falls back to `en-…` with `cross_lingual: true`. UI rendering is now done too: the
+web chat (`ui/`) displays every figure inline with its `Labels:` legend and a click-to-zoom lightbox.

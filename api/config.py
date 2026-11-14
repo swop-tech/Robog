@@ -38,6 +38,8 @@ API_VERSION = "0.1.0"
 API_DESCRIPTION = (
     "Hybrid retrieval (Bonus 01) + grounded, evidence-validated answering over the "
     "PUDU robot manuals, in EN/DE/IT.\n\n"
+    "`GET /` serves the zero-build web chat to a browser (Accept: text/html); API clients "
+    "get the JSON endpoint index. The chat is only the first client of the service.\n\n"
     "* `GET /search` - raw hybrid retrieval: `SearchResult.to_dict()` with resolved `image_url`s.\n"
     "* `POST /ask` - full RAG pipeline: answer, language, route, citations, figures, "
     "params, verification, cross_lingual.\n"

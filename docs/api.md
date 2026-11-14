@@ -8,9 +8,10 @@ an `AnswerComposer`, `api/app.py` adds validation/status codes/JSON, and
 ```bash
 pip install -r requirements-api.txt
 python -m ingest.run --data data        # once: build/chunks.jsonl + params + profiles
-python -m api                           # http://0.0.0.0:8000, Swagger UI at /docs
+python -m api                           # http://0.0.0.0:8000 — chat at /, Swagger at /docs
 python -m api --port 8080 --vector auto # dense fusion + a different port
 python -m unittest tests.test_api -v    # 57 tests, no API key, no network
+python -m unittest tests.test_ui -v     # 11 web-chat serving tests
 ```
 
 No key needed: without `GEMINI_API_KEY` the composer answers with its
@@ -34,6 +35,32 @@ python -m api.client --products --language it --product FlashBot --parameter pay
 ```
 
 The same three calls from `curl` are what the pitch demo runs.
+
+## `GET /` — the web chat (the required interface)
+
+`GET /` is content-negotiated, so one URL serves both audiences:
+
+```bash
+curl localhost:8000/                              # Accept: */*  -> the JSON endpoint index
+curl -H 'Accept: text/html' localhost:8000/       # a browser    -> the zero-build chat page
+```
+
+A browser navigating to `/` sends `Accept: text/html,…` and gets `ui/index.html`;
+every API client (`curl`, `api/client.py`, `Accept: */*` or `application/json`)
+keeps the machine-readable endpoint index it was written against (now with a
+`chat` key pointing at the page). The assets are a Starlette `StaticFiles` mount
+at `/ui` (`html=True`), so they are cached and **stay out of `/openapi.json`** —
+the documented paths are unchanged. The page keeps serving when the index is
+missing; `/ask` then renders the `503` fix command inline.
+
+The chat (`ui/`: plain HTML + CSS + one ES module — no bundler, framework or CDN)
+is built around the rubric: starter chips for all four winning scenarios, inline
+clickable citations (manual title, section, PDF page, source snippet), inline
+figures with their `Labels:` legend, a verification badge (citation + numeric
+checks) and a toggleable **Raw `/search` JSON** drawer with a *Re-run live* button
+that proves Bonus 01 on stage. It calls `POST /ask` and `GET /search` in parallel
+and normalises every `image_url` to a same-origin path, so figures load behind any
+reverse proxy. Full details: [`../ui/README.md`](../ui/README.md).
 
 ## `GET /search` — standalone hybrid retrieval
 
@@ -247,6 +274,9 @@ laptop or in a container; `python -m api` exposes the same knobs as flags.
 
 ## Next
 
-The chat UI: streaming answers, clickable citations (they already carry
-`citation` + `page` + `image_url`) and inline figures — the last open item in
-`docs/pipeline-review.md` §9.
+The web chat is shipped (`ui/`, served at `GET /`) — clickable citations, inline
+figures with their `Labels:` legend, the verification badge and the live
+`/search` drawer all render the contracts above. It closes the last open item in
+`docs/pipeline-review.md` §9. Still open: an SSE/streaming variant of `/ask` (the
+chat currently shows a loading state and renders the validated answer on
+completion), and end-to-end validation of the optional dense layer.
