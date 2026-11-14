@@ -32,7 +32,7 @@ Inspected in this repository — `ingest/embed_index.py`:
 | Output dimension | **1536** | `--dims` default, stored via `output_dimensionality` |
 | Batching | 100 texts per `embed_content` call | `range(0, len(texts), 100)` |
 | Auth | `GEMINI_API_KEY` or `GOOGLE_API_KEY` env var — never in code, never in git | `GeminiEmbedder.__init__` |
-| Document input | raw chunk `text` only | `embedder.embed([row["text"] …])` |
+| Document input | Official QA template: ``title: {title} \| text: {text}`` (``title: none`` when absent) | ``gemini_document_text()`` in the module (tested) |
 | Vectors normalized | no — Gemini outputs unit-normalized embeddings for cosine space | Chroma collection metadata `hnsw:space: cosine` |
 | Input limit check | max chunk 2,832 chars ≈ 809 tokens — all chunks ≪ 8,192-token limit | measured on `build/chunks.jsonl` |
 | Input volume | ≈ 237k–271k tokens**†** total; **14** API calls for 1,351 chunks | measured on `build/chunks.jsonl` |
@@ -43,20 +43,26 @@ Inspected in this repository — `ingest/embed_index.py`:
 on the free tier; the number exists so we can see we are nowhere near limits.
 
 **Query side — `retrieve/vector.py`:** identical model id, identical dimension (1536),
-identical text convention (raw text, no prefixes), same env-var auth, plus a per-session
-cache so fallback languages on identical text don't re-embed. Document side and query side
-are consistent today — that is the hard requirement.
+and the matching official query template `task: question answering | query: {question}`,
+same env-var auth, plus a per-session cache so fallback languages on identical text don't
+re-embed. Document side and query side are implemented symmetrically and unit-tested —
+that is the hard requirement; nothing is mixed across providers.
 
-**`task_type` caveat (read before indexing):** the repo uses **no** `task_type` parameter
-(correct for gemini-embedding-2, which replaced the old `task_type` enum with task
-instructions inside the prompt text for text-only tasks). The official page
-(`https://ai.google.dev/gemini-api/docs/embeddings`) could not be fetched from the
-engineering sandbox (no route to `ai.google.dev`), so the exact instruction template is
-**unverified here**. Raw text on both sides is self-consistent and valid; adding
-`task: search result | document: …` / `task: search result | query: …`-style prefixes would
-be an optimization **only if** the official page is applied symmetrically to documents and
-queries. Do not apply half of it. If the team confirms the official template from a machine
-with access, we add it on both sides in one commit and re-index.
+**Task instructions (APPROVED decision, implemented):** Gemini Embedding 2 moves the
+task signal into the text itself (no legacy `task_type`). We use exactly the approved
+official question-answering format for text-only retrieval:
+
+- document: `title: {title} | text: {passage}` (`title: none` when a chunk has no title;
+  every current chunk carries `metadata.title`)
+- query: `task: question answering | query: {question}`
+- Figure chunks carry caption/label text with the same document template; the image
+  pixels are never embedded; multimodal image instruction formats are intentionally not
+  applied (nothing image-like is indexed).
+
+Status honestly stated: templates are implemented and unit-tested, but the exact
+live-API behaviour has **not** been exercised end to end — that happens with the
+production run on the team's machine (§5 measures it). Use exactly these strings; do
+not improvise variants.
 
 ## 3. What will be embedded — modality by modality (measured representation)
 
@@ -136,7 +142,8 @@ identical input, so the DB is reproducible on every machine.
 
 ## 8. Limitations
 
-Production embedding quality is unproven until §5 is executed; the benchmark is
+Production embedding quality is unproven until §5 is executed (templates are implemented and
+unit-tested but unverified against the live API); the benchmark is
 keyword-matching on a small set and does not prove answer correctness; figure PNG pixels
 are not embedded; Google free-tier terms allow input use for product improvement (public
 docs, fine); no answer composer yet (Sujal's stage) — this database feeds retrieval only.

@@ -13,6 +13,18 @@ Both embedding providers are free -- pick one with --provider:
   free-tier request limit (~1,500 requests/day). Vectors are stored at 1536
   dimensions (the model supports 128-3072; Google recommends 768/1536/3072).
 
+Gemini Embedding 2 uses the official question-answering format for text-only
+retrieval (inputs are NOT prefixed with the legacy ``task_type``; the
+instruction lives in the text):
+
+* documents: ``title: {title} | text: {text}``   (``title: none`` when absent)
+* queries:   ``task: question answering | query: {question}``
+  (applied on the search side, see ``retrieve/vector.py``)
+
+The local e5 provider keeps its own ``passage: ``/``query: `` prefixes and is
+unaffected. Both sides match their provider exactly -- mixing templates across
+providers breaks the vectors.
+
 Usage:
 
     python -m ingest.embed_index --chunks build/chunks.jsonl
@@ -20,7 +32,8 @@ Usage:
 
 NOTE for queries later: with the local e5 model, queries must be prefixed
 "query: " and passages "passage: " (this script handles the passages; the
-search side must add "query: " to the question).
+search side must add "query: " to the question). With gemini, the same rule
+applies, using the two formats above.
 """
 
 from __future__ import annotations
@@ -33,6 +46,19 @@ from pathlib import Path
 # E5 models were trained with these prefixes -- they matter for quality.
 _E5_QUERY_PREFIX = "query: "
 _E5_PASSAGE_PREFIX = "passage: "
+
+
+def gemini_document_text(row: dict) -> str:
+    """Official Gemini Embedding 2 document template (text-only question
+    answering):
+
+        title: {title} | text: {text}
+
+    ``title: none`` is used when a chunk has no title. Figure chunks contribute
+    their caption/label text here; the image pixels are never embedded.
+    """
+    title = (row.get("metadata") or {}).get("title") or "none"
+    return f"title: {title} | text: {row.get('text', '')}"
 
 GEMINI_MODEL = "gemini-embedding-2"
 LOCAL_MODEL = "intfloat/multilingual-e5-small"
@@ -103,7 +129,13 @@ def main() -> None:
     print(f"Loaded {len(rows)} chunks from {args.chunks}")
 
     embedder = GeminiEmbedder(dims=args.dims) if args.provider == "gemini" else LocalEmbedder()
-    vectors = embedder.embed([row["text"] for row in rows])
+    if args.provider == "gemini":
+        texts = [gemini_document_text(row) for row in rows]
+        print("Template: Gemini question-answering document format (title: … | text: …)")
+    else:
+        texts = [row["text"] for row in rows]
+        print("Template: E5 passage prefix (passage: …)")
+    vectors = embedder.embed(texts)
 
     import chromadb  # light import, only needed now
 

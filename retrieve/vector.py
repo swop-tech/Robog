@@ -17,7 +17,9 @@ Query embedding must match ingestion:
 * ``gemini``  -- ``gemini-embedding-2`` at 1536 dimensions (the default Sujal's
   pipeline uses), via the free Google AI Studio tier. The key comes from the
   ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) environment variable -- never from
-  source code.
+  source code. Queries use the official question-answering template
+  ``task: question answering | query: {question}`` (pairs with the document
+  template ``title: {title} | text: {text}`` in ``ingest/embed_index.py``).
 
 Configuration via environment variables (defaults match ``ingest/embed_index.py``):
 
@@ -53,6 +55,22 @@ DEFAULT_DIMS = 1536                    # gemini output dimensions
 LOCAL_MODEL = "intfloat/multilingual-e5-small"
 GEMINI_MODEL = "gemini-embedding-2"    # must match ingest/embed_index.py
 E5_QUERY_PREFIX = "query: "            # e5 models need it; passages used "passage: "
+
+# Official Gemini Embedding 2 query template (text-only question answering).
+# Pairs with the document template in ingest/embed_index.py
+# (``title: {title} | text: {text}``).
+GEMINI_QUERY_INSTRUCTION = "task: question answering | query: "
+
+
+def gemini_query_text(question: str) -> str:
+    """Official Gemini Embedding 2 query template:
+
+        task: question answering | query: {question}
+
+    Gemini Embedding 2 uses task instructions in the text rather than the
+    legacy ``task_type`` setting.
+    """
+    return f"{GEMINI_QUERY_INSTRUCTION}{question}"
 
 ENV_PATH = "ROBOG_CHROMA_PATH"
 ENV_COLLECTION = "ROBOG_CHROMA_COLLECTION"
@@ -117,7 +135,7 @@ def _gemini_embedder(dims: int):
     def embed(texts: list[str]) -> list[list[float]]:
         response = client.models.embed_content(
             model=GEMINI_MODEL,
-            contents=list(texts),
+            contents=[gemini_query_text(text) for text in texts],
             output_dimensionality=dims,
         )
         return [list(embedding.values) for embedding in response.embeddings]

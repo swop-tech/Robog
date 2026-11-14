@@ -64,6 +64,12 @@ Facts worth repeating:
   `passage: ` (the ingest script does this) and questions **must** be embedded with
   `query: ` (the retrieval engine does this in `retrieve/vector.py`). Mixing them up
   quietly destroys retrieval quality, so the code keeps the two sides explicitly matched.
+- **gemini-embedding-2 uses official question-answering templates in the text itself**
+  (no legacy `task_type`): documents are embedded as
+  `title: {title} | text: {text}` (`title: none` when a chunk has no title) and
+  questions as `task: question answering | query: {question}`. Both sides are
+  implemented and tested (`ingest/embed_index.py: gemini_document_text`,
+  `retrieve/vector.py: gemini_query_text`); image pixels are never embedded.
 - Vectors are **normalized** before storage (cosine space).
 - Ingestion happens in **batches** (100 texts per call) — ~14 calls for 1,351 chunks,
   comfortably inside the free tier (~1,500 requests/day as documented by the team).
@@ -114,7 +120,7 @@ vector="auto")` from code):
    (`retrieve/lang.py`, deterministic, no model).
 2. The question is embedded with the **same model and dimensionality used for indexing** —
    this symmetry is mandatory, otherwise "distance" between vectors is meaningless.
-   For e5 this means prefixing the raw question with `query: `.
+   e5: prefix with `query: `. Gemini: use `task: question answering | query: {question}`.
 3. That vector is handed to ChromaDB: "nearest neighbours, please".
 
 Query embeddings are **cached per session**, so asking in German after English (the
