@@ -307,6 +307,8 @@ class RobogService:
             "language_instruction": raw["language_instruction"],
             "validation": raw["validation"],
             "notes": raw["notes"],
+            # Why the offline formatter answered instead of the LLM (else None).
+            "fallback_reason": raw.get("fallback_reason"),
             "latency_ms": raw["latency_ms"],
         }
         if include_search:

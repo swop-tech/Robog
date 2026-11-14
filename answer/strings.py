@@ -213,6 +213,30 @@ STRINGS: dict[str, dict[str, str]] = {
             "in kg o una larghezza di passaggio in cm. Poi confronto i robot adatti con dati e pagine di riferimento."
         ),
     },
+    # -- small talk: answered directly, never with a retrieved passage --------
+    "greeting": {
+        "en": (
+            "Hi! I'm Robog, the assistant for the PUDU robot manuals. Ask me for a specification "
+            "(for example the payload of the FlashBot), how to do something (how to clean the "
+            "BellaBot), help with a fault, or which robot fits a job."
+        ),
+        "de": (
+            "Hallo! Ich bin Robog, der Assistent für die Handbücher der PUDU-Roboter. Fragen Sie "
+            "mich nach technischen Daten (zum Beispiel der Zuladung des FlashBot), nach einer "
+            "Anleitung (wie der BellaBot gereinigt wird), nach Hilfe bei einer Störung oder danach, "
+            "welcher Roboter zu einem Einsatz passt."
+        ),
+        "it": (
+            "Ciao! Sono Robog, l'assistente per i manuali dei robot PUDU. Chiedimi una specifica "
+            "(per esempio il carico del FlashBot), come fare qualcosa (come pulire il BellaBot), "
+            "aiuto per un guasto oppure quale robot è adatto a un lavoro."
+        ),
+    },
+    "thanks_reply": {
+        "en": "You're welcome! Ask me anything else about the PUDU robots.",
+        "de": "Gern geschehen! Fragen Sie mich jederzeit weiter zu den PUDU-Robotern.",
+        "it": "Prego! Chiedimi pure qualsiasi altra cosa sui robot PUDU.",
+    },
     "provider_offline_note": {
         "en": "Answer composed by the offline formatter (no LLM call).",
         "de": "Antwort vom Offline-Formatierer erstellt (kein LLM-Aufruf).",

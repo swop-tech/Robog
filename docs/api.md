@@ -11,7 +11,7 @@ python -m ingest.run --data data        # once: build/chunks.jsonl + params + pr
 python -m api                           # http://0.0.0.0:8000 — chat at /, Swagger at /docs
 uvicorn api.app:app --reload            # the same app (reads .env too)
 python -m api --port 8080 --vector off  # keyword-only + a different port
-python -m unittest tests.test_api -v    # 63 tests, no API key, no network
+python -m unittest tests.test_api -v    # 67 tests, no API key, no network
 python -m unittest tests.test_ui -v     # 13 web-chat serving tests
 ```
 
@@ -37,6 +37,7 @@ curl -s localhost:8000/health
 |---|---|---|
 | `vector_active` | `true` | `vector_detail` gives the reason (no store, provider mismatch, missing key/package) |
 | `provider.provider` | `gemini` | `provider.reason` gives the reason; answers come from the offline formatter |
+| `provider.last_error` | `null` | the last Gemini call failed (wrong model ID, rejected key, quota); answers are coming from the offline formatter until a call succeeds. `python -m answer --check` repeats the call |
 | `chunks` | `1351` | re-run `python -m ingest.run --data data` |
 
 Then ask something: `/search` hits carry `"sources": [..., "vector"]` and
@@ -96,7 +97,7 @@ to six recent user questions with each `/ask` request; those turns are used only
 to resolve references and never as evidence. What the API cannot do yet is
 labelled in Settings and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
 `api.js` (network) / `store.js` (state) / `render.js` + `markdown.js` (payload →
-HTML) / `app.js` (DOM), with 202 `node --test` cases plus an opt-in suite that
+HTML) / `app.js` (DOM), with 208 `node --test` cases plus an opt-in suite that
 drives a running server. Full details: [`../ui/README.md`](../ui/README.md).
 
 ## `GET /search` — standalone hybrid retrieval
@@ -161,8 +162,20 @@ The response leads with the contract from `docs/answering.md` §3 — `answer`,
 `language`, `route`, `citations`, `figures`, `params`, `verification`,
 `cross_lingual` — and keeps the rest of `Answer.to_dict()` as the audit trail
 (`provider`, `model`, `grounded`, `verified`, `source_languages`,
-`language_instruction`, `validation`, `notes`, `latency_ms`; `search` and
-`evidence` only when asked for):
+`language_instruction`, `validation`, `notes`, `fallback_reason`, `latency_ms`;
+`search` and `evidence` only when asked for).
+
+`fallback_reason` is `null` when the model wrote the answer. When `provider` is
+`offline` it says why the formatter answered instead (`GEMINI_API_KEY not set`,
+`the LLM call failed: …` with the API's error, or `the generated answer contained
+a number that is not in the retrieved manual passages`); the chat shows it on the
+card. `GET /health` carries the last failed call as `provider.last_error`, so a
+configured key with a wrong model ID is no longer reported as a healthy Gemini.
+`verification.state` is `repaired` both when the validator changed the answer
+and when it kept a sentence that has no source; `verification.issues` lists
+which. See [`answering.md`](answering.md) §1 and §4a.
+
+Example:
 
 ```json
 {
@@ -186,6 +199,7 @@ The response leads with the contract from `docs/answering.md` §3 — `answer`,
   "cross_lingual": false,
   "provider": "offline", "grounded": true, "verified": true,
   "source_languages": ["de"], "notes": ["offline formatter (GEMINI_API_KEY not set)"],
+  "fallback_reason": "GEMINI_API_KEY not set",
   "latency_ms": 9
 }
 ```

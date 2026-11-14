@@ -9,6 +9,11 @@ The offline formatter is the default so the command always works::
     python -m answer "Qual è la velocità massima del FlashBot?"        # offline
     python -m answer "Zeig mir ein Bild vom FlashBot" --provider gemini
     python -m answer "Which robot fits my restaurant?" --json
+
+If the answers read like pasted manual passages, the offline formatter is
+writing them. ``--check`` makes one real call to the model and says why::
+
+    python -m answer --check
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from retrieve.engine import SearchEngine
 from retrieve.env import load_dotenv
 
 from .composer import AnswerComposer
-from .llm import DEFAULT_LLM_MODEL
+from .llm import DEFAULT_LLM_MODEL, check_llm
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,7 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Answer a question from the PUDU manuals, grounded and validated."
     )
-    parser.add_argument("question", help="the question, in EN, DE or IT")
+    parser.add_argument("question", nargs="?", help="the question, in EN, DE or IT")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="test the LLM connection with one real call and explain any failure",
+    )
     parser.add_argument("--k", default=5, type=int, help="chunks to retrieve (default: 5)")
     parser.add_argument("--language", default=None, help="force the question language (en|de|it)")
     parser.add_argument("--product", default=None, help="restrict retrieval to one product")
@@ -47,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--params", default="build/params.jsonl")
     parser.add_argument("--profiles", default="build/profiles.jsonl")
     args = parser.parse_args(argv)
+
+    if args.check:
+        ok, lines = check_llm(args.model)
+        print("\n".join(lines))
+        return 0 if ok else 1
+    if not args.question:
+        parser.error("a question is required (or use --check)")
 
     engine = SearchEngine.from_build(args.chunks, args.params, profiles_path=args.profiles)
     composer = AnswerComposer(
@@ -91,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
             print("  nothing to verify: no passage of the manuals answered this")
         else:
             print("  all checks passed")
+    if answer.fallback_reason:
+        print(f"\nWritten by the offline formatter because: {answer.fallback_reason}")
+        print("  (it can only quote the manuals; run `python -m answer --check`)")
     if answer.notes:
         print("\nNotes:")
         for note in answer.notes:

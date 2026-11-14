@@ -19,9 +19,11 @@ The tests are organised around the three claims the answering phase makes:
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from answer.composer import AnswerComposer
 from answer.evidence import Evidence, EvidenceRef, iter_number_units
@@ -130,7 +132,7 @@ class EvidenceTests(unittest.TestCase):
     def test_numbers_cover_chunks_and_profile_cards(self):
         evidence = make_evidence()
         self.assertIn(("20", "kg"), evidence.numbers)
-        self.assertIn(("0.5", "seconds"), evidence.numbers)    # 0.5 seconds
+        self.assertIn(("0.5", "s"), evidence.numbers)          # 0.5 seconds, canonical unit
         self.assertIn(("25.6", "ah"), evidence.numbers)        # profile card
         self.assertIn(("55", "kg"), evidence.numbers)
 
@@ -230,12 +232,62 @@ class CitationCheckTests(unittest.TestCase):
         self.assertIn("[2]", report.answer)
         self.assertTrue(any(issue.action == "repaired" for issue in report.issues))
 
-    def test_uncited_claim_without_support_is_dropped(self):
+    def test_uncited_claim_without_support_is_dropped_in_strict_mode(self):
         answer = "The robot can also make espresso for the staff."
-        report = validate_answer(answer, make_evidence())
+        report = validate_answer(answer, make_evidence(), strict=True)
         self.assertFalse(report.ok)
         self.assertEqual(report.answer.strip(), "")
         self.assertTrue(any(issue.action == "dropped" for issue in report.issues))
+
+    def test_uncited_sentence_is_kept_and_reported_by_default(self):
+        # The text survives, but it is never counted as cited or shown as verified.
+        answer = "The robot can also make espresso for the staff."
+        report = validate_answer(answer, make_evidence())
+        self.assertTrue(report.ok)
+        self.assertFalse(report.verified)
+        self.assertEqual(report.answer, answer)
+        self.assertEqual((report.sentences_checked, report.sentences_cited), (1, 0))
+        issue = report.issues[0]
+        self.assertEqual((issue.check, issue.severity, issue.action), ("citation", "warning", "kept"))
+        self.assertIn("espresso", issue.detail)
+
+    def test_conversational_wrapping_does_not_cost_the_cited_answer(self):
+        answer = (
+            "Sure! Here is the short version.\n\n"
+            "The robot has a load capacity of 20 kg [1].\n\n"
+            "Would you like the charging details too?"
+        )
+        report = validate_answer(answer, make_evidence())
+        self.assertTrue(report.ok)
+        self.assertEqual(report.answer, answer)
+        # "Sure!" and the question back are not claims; the lead-in is uncited.
+        self.assertEqual((report.sentences_checked, report.sentences_cited), (2, 1))
+
+    def test_a_number_in_a_question_is_still_verified(self):
+        report = validate_answer("Did you mean the 45 kg version?", make_evidence())
+        self.assertFalse(report.ok)
+        self.assertNotIn("45", report.answer)
+
+    def test_paragraph_citation_covers_the_sentences_before_it(self):
+        answer = "Find the switch on the base first. Then hold it to start the robot [2]."
+        report = validate_answer(answer, make_evidence())
+        self.assertTrue(report.verified)
+        self.assertEqual(report.answer, answer)
+        self.assertEqual((report.sentences_checked, report.sentences_cited), (2, 2))
+
+    def test_an_introduction_does_not_get_a_citation_invented_for_it(self):
+        # Shares only "FlashBot" and "load" with the evidence: not support.
+        answer = "Happy to explain the FlashBot load figures."
+        report = validate_answer(answer, make_evidence())
+        self.assertEqual(report.answer, answer)
+        self.assertNotIn("[", report.answer)
+
+    def test_reply_that_cites_nothing_is_not_reported_as_checked(self):
+        report = validate_answer(
+            "The manuals I have do not list a price for this robot.", make_evidence()
+        )
+        self.assertTrue(report.ok)
+        self.assertFalse(report.checks_run)
 
     def test_headings_need_no_citation(self):
         report = validate_answer("**Passages from the manuals**", make_evidence())
@@ -299,6 +351,32 @@ class NumericCheckTests(unittest.TestCase):
         bare = validate_answer("The robot weighs 55 kg [3].", make_evidence())
         self.assertEqual(bare.numbers_verified, 1)
 
+    def test_spelled_out_unit_matches_the_abbreviation(self):
+        # The manual prints "0.5 seconds"; DE and IT answers translate the unit.
+        for answer in (
+            "Hold the switch for 0.5 s [2].",
+            "Halte den Schalter 0,5 Sekunden gedrückt [2].",
+            "Tieni premuto l'interruttore per 0,5 secondi [2].",
+        ):
+            report = validate_answer(answer, make_evidence())
+            self.assertTrue(report.ok, answer)
+            self.assertEqual(report.numbers_verified, 1, answer)
+        # ...and a renamed unit is not a converted one.
+        self.assertFalse(validate_answer("Hold it for 0.5 minutes [2].", make_evidence()).ok)
+
+    def test_preposition_after_a_number_is_not_a_unit(self):
+        # "a" is ampere only as a capital; "in" is inch only when no word follows.
+        self.assertEqual(iter_number_units("da 10 a 20 kg")[0][:2], ("10", ""))
+        self.assertEqual(iter_number_units("10 in total")[0][:2], ("10", ""))
+        self.assertEqual(iter_number_units("rated 5 A.")[0][:2], ("5", "a"))
+        report = validate_answer("Il carico va da 10 a 20 kg [1].", make_evidence())
+        self.assertTrue(report.ok, report.to_dict())
+
+    def test_step_ordinals_are_not_claims(self):
+        report = validate_answer("Step 7: hold the power switch [2].", make_evidence())
+        self.assertEqual(report.numbers_checked, 0)
+        self.assertTrue(report.ok)
+
     def test_repair_false_only_reports(self):
         answer = "The robot carries up to 45 kg [1]."
         report = validate_answer(answer, make_evidence(), repair=False)
@@ -340,8 +418,16 @@ class QuoteCheckTests(unittest.TestCase):
         )
         self.assertEqual(report.quotes_verified, 0)
         self.assertNotIn('"the robot must be blessed', report.answer)
-        self.assertTrue(any(issue.check == "quote" and issue.severity == "error"
+        # Unquoting is a complete repair, so the answer is not discarded for it...
+        self.assertTrue(any(issue.check == "quote" and issue.severity == "warning"
                             for issue in report.issues))
+        self.assertTrue(report.ok)
+        # ...unless the strict rule is asked for.
+        strict = validate_answer(
+            'The manual says "the robot must be blessed with holy water" [2].',
+            make_evidence(), strict=True,
+        )
+        self.assertFalse(strict.ok)
 
     def test_quote_from_another_ref_fails(self):
         # The phrase is in [2] but the sentence cites [1].
@@ -494,6 +580,84 @@ class GeneratorTests(unittest.TestCase):
         generator = GeminiGenerator(client=_FailingClient(), attempts=2, sleep_fn=lambda _s: None)
         self.assertIsNone(generator.draft("prompt", make_evidence(), language="en"))
 
+    def test_failure_reason_is_kept_in_words_a_user_can_act_on(self):
+        cases = (
+            ("404 NOT_FOUND: models/x is not found for API version v1beta", "ROBOG_LLM_MODEL"),
+            ("400 INVALID_ARGUMENT: API key not valid. Please pass a valid API key.", "GEMINI_API_KEY"),
+            ("429 RESOURCE_EXHAUSTED: quota exceeded", "quota"),
+        )
+        for message, expected in cases:
+            generator = GeminiGenerator(
+                client=_FailingClient(message), attempts=1, sleep_fn=lambda _s: None
+            )
+            self.assertIsNone(generator.draft("prompt", make_evidence(), language="en"))
+            self.assertIn(expected, generator.last_error)
+            self.assertIn(message[:20], generator.last_error)      # the raw error is kept
+
+    def test_empty_response_names_the_finish_reason(self):
+        candidate = SimpleNamespace(content=None, finish_reason=SimpleNamespace(name="MAX_TOKENS"))
+        client = SimpleNamespace(models=SimpleNamespace(
+            generate_content=lambda **_kw: SimpleNamespace(text=None, candidates=[candidate])
+        ))
+        generator = GeminiGenerator(client=client, attempts=1)
+        self.assertIsNone(generator.draft("prompt", make_evidence(), language="en"))
+        self.assertIn("MAX_TOKENS", generator.last_error)
+
+    def test_success_clears_the_previous_failure(self):
+        generator = GeminiGenerator(client=_FailingClient(), attempts=1)
+        generator.draft("prompt", make_evidence(), language="en")
+        self.assertTrue(generator.last_error)
+        generator._client = _FakeClient("Load capacity is 20 kg [1].")
+        generator.draft("prompt", make_evidence(), language="en")
+        self.assertIsNone(generator.last_error)
+
+    def test_output_budget_leaves_room_for_a_thinking_model(self):
+        from answer.llm import MAX_OUTPUT_TOKENS, _generation_config
+
+        self.assertGreaterEqual(MAX_OUTPUT_TOKENS, 4096)
+        config = _generation_config()
+        if config is not None:                       # google-genai installed
+            self.assertEqual(config.max_output_tokens, MAX_OUTPUT_TOKENS)
+
+    # -- python -m answer --check ----------------------------------------------
+    def test_check_reports_a_working_model(self):
+        from answer.llm import check_llm
+
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_PROVIDER": "auto"}):
+            ok, lines = check_llm("gemini-test", client=_FakeClient("ready"))
+        self.assertTrue(ok)
+        self.assertTrue(any("gemini-test answered" in line for line in lines), lines)
+
+    def test_check_lists_usable_models_when_the_configured_one_is_missing(self):
+        from answer.llm import check_llm
+
+        client = _FailingClient("404 NOT_FOUND: models/gemini-test is not found")
+        client.models.list = lambda: [
+            SimpleNamespace(name="models/gemini-pro-x", supported_actions=["generateContent"]),
+            SimpleNamespace(name="models/gemini-flash-x", supported_actions=["generateContent"]),
+            SimpleNamespace(name="models/embed-x", supported_actions=["embedContent"]),
+        ]
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_PROVIDER": "auto"}):
+            ok, lines = check_llm("gemini-test", client=client)
+        self.assertFalse(ok)
+        report = "\n".join(lines)
+        self.assertIn("ROBOG_LLM_MODEL", report)
+        self.assertLess(report.index("gemini-flash-x"), report.index("gemini-pro-x"))   # flash first
+        self.assertNotIn("embed-x", report)
+
+    def test_check_names_a_missing_key_and_a_forced_offline_provider(self):
+        from answer.llm import check_llm
+
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_PROVIDER": "auto", "GEMINI_API_KEY": "",
+                                          "GOOGLE_API_KEY": ""}):
+            ok, lines = check_llm()
+        self.assertFalse(ok)
+        self.assertIn("GEMINI_API_KEY not set", "\n".join(lines))
+        with mock.patch.dict(os.environ, {"ROBOG_LLM_PROVIDER": "offline"}):
+            ok, lines = check_llm(client=_FakeClient("ready"))
+        self.assertFalse(ok)
+        self.assertIn("forced", lines[0])
+
     def test_model_can_be_overridden(self):
         client = _FakeClient("ok")
         generator = GeminiGenerator(model="gemini-2.5-pro", client=client)
@@ -522,11 +686,12 @@ class _FakeClient:
 
 
 class _FailingClient:
-    def __init__(self):
+    def __init__(self, message: str = "429 RESOURCE_EXHAUSTED: quota exceeded"):
+        self.message = message
         self.models = SimpleNamespace(generate_content=self._generate)
 
     def _generate(self, **_kwargs):
-        raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")
+        raise RuntimeError(self.message)
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +722,19 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Recent user questions (context only, not evidence)", prompt)
         self.assertIn("Tell me about FlashBot", prompt)
         self.assertIn("never treat it as evidence", prompt)
+
+    def test_prompt_asks_for_an_explanation_not_an_excerpt(self):
+        prompt = build_prompt("q", make_evidence(), language="en")
+        self.assertIn("Explain; do not paste", prompt)
+        self.assertIn("needs no citation", prompt)          # what the validator now allows
+        self.assertIn("greeting", prompt)
+
+    def test_a_whole_chunk_reaches_the_model(self):
+        # The longest chunk in the corpus is ~2,800 characters; the old 900 cap
+        # cut procedures in half before the model ever saw them.
+        evidence = make_evidence()
+        evidence.refs[1].text = "Step. " * 450 + "LAST-STEP"      # ~2,700 chars
+        self.assertIn("LAST-STEP", build_prompt("q", evidence, language="en"))
 
     def test_evidence_block_is_capped(self):
         evidence = make_evidence()
@@ -622,6 +800,138 @@ class ComposerTests(unittest.TestCase):
         composer.answer("payload?", result=self._result())
         self.assertEqual(len(generator.calls), 2)
         self.assertIn("failed the evidence check", generator.calls[1])
+
+    # -- a generated answer survives unless a hard fact is wrong ----------------
+    def test_conversational_llm_answer_is_kept(self):
+        text_value = (
+            "Good news, that one is in the spec table.\n\n"
+            "The FlashBot carries 20 kg in total, which is 10 kg per tray [1].\n\n"
+            "Want me to look up the charging time as well?"
+        )
+        generator = StubGenerator(text_value, name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(answer.provider, "gemini")
+        self.assertEqual(answer.text, text_value)
+        self.assertEqual(len(generator.calls), 1)        # no retry, no quota spent
+        self.assertIsNone(answer.fallback_reason)
+        self.assertTrue(answer.grounded)
+        self.assertFalse(answer.verified)                # one sentence has no source
+
+    def test_llm_saying_the_manuals_do_not_cover_it_is_not_replaced_by_excerpts(self):
+        text_value = "The manuals I have do not give a price for the FlashBot."
+        generator = StubGenerator(text_value, name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "price?", result=self._result()
+        )
+        self.assertEqual(answer.provider, "gemini")
+        self.assertEqual(answer.text, text_value)
+        self.assertEqual(answer.citations, [])
+        self.assertFalse(answer.validation.checks_run)   # nothing shown as verified
+
+    def test_invented_number_still_discards_the_llm_answer_and_says_why(self):
+        generator = StubGenerator("The robot carries 45 kg [1].", name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(len(generator.calls), 2)        # one retry
+        self.assertEqual(answer.provider, "offline")
+        self.assertNotIn("45", answer.text)
+        self.assertIn("a number that is not in the retrieved manual passages", answer.fallback_reason)
+        self.assertEqual(answer.to_dict()["fallback_reason"], answer.fallback_reason)
+
+    def test_retry_that_fixes_the_number_is_used(self):
+        class TwoStep(StubGenerator):
+            def draft(self, prompt, evidence, *, language, route="default", question=""):
+                draft = super().draft(prompt, evidence, language=language)
+                if len(self.calls) > 1:
+                    draft.text = "The robot carries 20 kg [1]."
+                return draft
+
+        generator = TwoStep("The robot carries 45 kg [1].", name="gemini")
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(answer.provider, "gemini")
+        self.assertEqual(answer.text, "The robot carries 20 kg [1].")
+        self.assertIsNone(answer.fallback_reason)
+
+    def test_strict_mode_restores_the_all_or_nothing_rule(self):
+        text_value = (
+            "The FlashBot carries 20 kg [1].\n\n"
+            "Engineers love it for banquets and weddings."
+        )
+        for strict, provider in ((False, "gemini"), (True, "offline")):
+            generator = StubGenerator(text_value, name="gemini")
+            answer = AnswerComposer(SearchEngine([]), generator=generator, strict=strict).answer(
+                "payload?", result=self._result()
+            )
+            self.assertEqual(answer.provider, provider, f"strict={strict}")
+        self.assertIn("strict mode", answer.fallback_reason)
+
+    def test_strict_mode_can_be_set_from_the_environment(self):
+        composer = AnswerComposer(SearchEngine([]), provider="offline")
+        with mock.patch.dict(os.environ, {"ROBOG_ANSWER_STRICT": "1"}):
+            self.assertTrue(composer.strict)
+        with mock.patch.dict(os.environ, {"ROBOG_ANSWER_STRICT": ""}):
+            self.assertFalse(composer.strict)
+
+    def test_failed_llm_call_reports_the_reason_on_the_answer(self):
+        generator = GeminiGenerator(
+            model="gemini-nope", client=_FailingClient("404 NOT_FOUND: models/gemini-nope is not found"),
+        )
+        answer = AnswerComposer(SearchEngine([]), generator=generator).answer(
+            "payload?", result=self._result()
+        )
+        self.assertEqual(answer.provider, "offline")
+        self.assertIn("gemini-nope", answer.fallback_reason)
+        self.assertIn("ROBOG_LLM_MODEL", answer.fallback_reason)
+        self.assertTrue(any("404" in note for note in answer.notes))
+
+    def test_offline_by_configuration_reports_the_reason(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "",
+                                          "ROBOG_LLM_PROVIDER": ""}):
+            answer = AnswerComposer(SearchEngine([])).answer("payload?", result=self._result())
+            chosen = AnswerComposer(SearchEngine([]), provider="offline").answer(
+                "payload?", result=self._result()
+            )
+        self.assertEqual(answer.provider, "offline")
+        self.assertEqual(answer.fallback_reason, "GEMINI_API_KEY not set")
+        self.assertIn("selected", chosen.fallback_reason)     # not blamed on a missing key
+
+    # -- small talk --------------------------------------------------------------
+    def test_greeting_gets_a_greeting_not_a_manual_passage(self):
+        generator = StubGenerator("should not be called", name="gemini")
+        composer = AnswerComposer(SearchEngine([]), generator=generator)
+        for question, language, marker in (
+            ("Hello!", "en", "I'm Robog"),
+            ("Grüß Gott", "de", "Ich bin Robog"),
+            ("ciao", "it", "Sono Robog"),
+        ):
+            answer = composer.answer(question, result=self._result())
+            self.assertIn(marker, answer.text, question)
+            self.assertEqual(answer.language, language, question)
+            self.assertEqual(answer.citations, [], question)
+            self.assertFalse(answer.validation.checks_run, question)
+            self.assertIsNone(answer.fallback_reason, question)
+        self.assertEqual(generator.calls, [])
+
+    def test_thanks_is_acknowledged(self):
+        composer = AnswerComposer(SearchEngine([]), provider="offline")
+        self.assertIn("welcome", composer.answer("thanks", result=self._result()).text)
+        self.assertIn("Prego", composer.answer("Grazie mille!", result=self._result()).text)
+
+    def test_a_question_that_starts_with_a_greeting_is_still_answered(self):
+        composer = AnswerComposer(SearchEngine([]), provider="offline")
+        answer = composer.answer("Hallo, wieviel Zuladung hat der FlashBot?", result=self._result())
+        self.assertIn("20 kg", answer.text)
+        self.assertTrue(answer.citations)
+
+    def test_requested_language_wins_for_small_talk(self):
+        composer = AnswerComposer(SearchEngine([]), provider="offline")
+        answer = composer.answer("hi", result=self._result(), language="it")
+        self.assertIn("Sono Robog", answer.text)
 
     def test_provider_metadata_and_json_shape(self):
         composer = AnswerComposer(SearchEngine([]), provider="offline")
@@ -887,6 +1197,33 @@ class AnswerEvaluationTests(unittest.TestCase):
         report = evaluate(composer, questions)
         self.assertEqual(report.invented, 0)
         self.assertIn("20 kg", report.results[0].text)
+
+    def test_evaluate_reports_how_many_answers_the_model_wrote(self):
+        from answer.evaluate import evaluate
+        from answer.formatter import Draft
+
+        class Mixed:
+            """Grounded for the first question, an invented number for the second."""
+            name = "gemini"
+            model = "fake"
+
+            def draft(self, prompt, evidence, *, language, route="default", question=""):
+                body = "It carries 20 kg [1]." if "first" in question else "It carries 45 kg [1]."
+                return Draft(body, provider="gemini", language=language)
+
+        composer = AnswerComposer(StubEngine(language="en"), generator=Mixed())
+        questions = [
+            {"id": "1", "question": "first payload?", "language": "en", "type": "lookup"},
+            {"id": "2", "question": "second payload?", "language": "en", "type": "lookup"},
+        ]
+        report = evaluate(composer, questions)
+        self.assertEqual(report.provider, "gemini")
+        self.assertEqual(report.written_by_model, 1)
+        reasons = report.fallback_reasons()
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("number", reasons[0][0])
+        self.assertEqual(reasons[0][1], 1)
+        self.assertIsNone(report.results[0].fallback_reason)
 
     def test_markdown_report_renders(self):
         from answer.evaluate import AnswerReport, AnswerResult, render_markdown

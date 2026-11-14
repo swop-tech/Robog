@@ -25,7 +25,10 @@ REFERENCE_LINE_RE = re.compile(r"^\s*\[\d+\]\s")
 #: Locators that carry numbers but make no factual claim.
 LOCATOR_RE = re.compile(
     r"(?:\b(?:p|pp|page|pages|seite|seiten|pagina|pagine|s|vgl|siehe|see|fig|figure|abbildung|abb)\.\s*\d+(?:\s*[–-]\s*\d+)?)"
-    r"|(?:§\s*[\d.]+)",
+    r"|(?:§\s*[\d.]+)"
+    # "Step 5" / "Schritt 5" / "Passo 5": the ordinal of an instruction, which an
+    # answer may renumber when it merges or skips steps of the manual.
+    r"|(?:\b(?:steps?|schritte?|passo|passi|passaggio|fase)\s+\d+(?:\s*[–-]\s*\d+)?\b)",
     re.IGNORECASE,
 )
 

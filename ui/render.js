@@ -98,6 +98,7 @@ export function assistantCardHTML(message, { mediaUrl, icons } = {}) {
       <span class="meta-badge meta-badge--provider" title="Answer generator">${provider}</span>
       ${p.latency_ms != null ? `<span class="meta-latency">${esc(p.latency_ms)} ms</span>` : ""}
     </div>`,
+    fallbackNoteHTML(p),
     `<div class="answer md">${renderMarkdown(p.answer || "")}</div>`,
     renderProfiles(p.profiles, { mediaUrl }),
     renderSpecs(p.params),
@@ -109,6 +110,22 @@ export function assistantCardHTML(message, { mediaUrl, icons } = {}) {
     `<div class="msg-foot"><time class="msg-time" datetime="${esc(message.createdAt || "")}">${esc(shortTime(message.createdAt))}</time></div>`,
   ];
   return `<article class="bot-card">${parts.filter(Boolean).join("\n")}</article>`;
+}
+
+/**
+ * Why this answer is quoted passages rather than prose. The offline formatter
+ * cannot explain, only excerpt, so when it stands in for the model the card
+ * says so and gives the server's reason (`fallback_reason`): no key, a failed
+ * Gemini call with its error, or a generated answer that failed the number
+ * check. Deterministic replies that never involve the model carry no reason.
+ */
+export function fallbackNoteHTML(p) {
+  if (!p || p.provider !== "offline" || !p.fallback_reason) return "";
+  return `
+    <p class="fallback-note" role="note">
+      <b>Quoted from the manuals, not written by the model.</b>
+      ${esc(`Reason: ${p.fallback_reason}.`)}
+    </p>`;
 }
 
 /** “Answer in Italian · sources DE, EN” — Bonus 02, disclosed on the card. */
@@ -305,7 +322,8 @@ export function verificationDetailsHTML(v) {
   const issues = (v.issues || []).length
     ? `<ul class="issues">${v.issues.map((issue) =>
         `<li class="issue ${issue.severity === "error" ? "issue--error" : ""}">
-           <b>${esc(issue.check)} · ${esc(issue.action || issue.severity)}</b> — ${esc(issue.message)}
+           <b>${esc(issue.check)} · ${esc(issue.action || issue.severity)}</b> — ${esc(issue.message)}${
+             issue.detail ? `<q class="issue-detail">${esc(issue.detail)}</q>` : ""}
          </li>`).join("")}</ul>`
     : nothingChecked
       ? `<p class="verify-note">The retrieval engine found no passage that answers this, so the checks had
@@ -416,13 +434,20 @@ export function statusChipHTML(health, { icons } = {}) {
   if (!health.ready) {
     return { className: "status--down", label: "index not built", title: health.detail || "Run: python -m ingest.run --data data" };
   }
-  const provider = health.provider?.provider === "gemini" ? "Gemini" : "offline";
+  // A configured Gemini whose last call failed is answering through the offline
+  // formatter; the pill must not keep saying "Gemini".
+  const llmError = health.provider?.provider === "gemini" ? health.provider?.last_error : null;
+  const provider = health.provider?.provider === "gemini"
+    ? (llmError ? "Gemini failing" : "Gemini")
+    : "offline";
   const vector = health.vector_active ? "hybrid" : "keyword";
+  const why = llmError || (health.provider?.provider === "gemini" ? "" : health.provider?.reason);
   return {
     className: "status--ready",
     label: `ready · ${provider} · ${vector}`,
     title: `${health.chunks} chunks · ${health.params} parameters · ${health.products} products · ` +
-      `${health.media_files} figures · vector: ${health.vector_detail || vector}`,
+      `${health.media_files} figures · vector: ${health.vector_detail || vector}` +
+      (why ? ` · answers: ${why}` : ""),
     html: `${ic("database")}`,
   };
 }

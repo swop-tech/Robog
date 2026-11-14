@@ -747,6 +747,12 @@ img { max-width: 100%; display: block; }
   font-size: var(--t-xs); font-weight: 600;
 }
 .cross-badge::before { content: "🌐"; font-size: 12px; }
+.fallback-note {
+  padding: 8px 12px; border-radius: var(--r-sm);
+  background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn);
+  font-size: var(--t-xs); line-height: 1.5; overflow-wrap: anywhere;
+}
+.fallback-note b { font-weight: 700; }
 
 /* ------------------------------------------------------------ verification --- */
 .verify { display: grid; gap: var(--s-2); }
@@ -790,6 +796,7 @@ img { max-width: 100%; display: block; }
   background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-border);
 }
 .issue b { font-weight: 700; }
+.issue-detail { display: block; margin-top: 3px; opacity: .85; font-style: italic; }
 .issue--error { background: var(--bad-soft); color: var(--bad); border-color: var(--bad-border); }
 
 /* ---------------------------------------------------------------- sources --- */

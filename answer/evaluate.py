@@ -65,6 +65,8 @@ class AnswerResult:
     quotes_ok: int = 0
     text: str = ""
     issues: list[str] = field(default_factory=list)
+    #: why the formatter wrote this answer instead of the model (``None`` if it did not)
+    fallback_reason: str | None = None
 
 
 @dataclass
@@ -130,6 +132,21 @@ class AnswerReport:
     def invented(self) -> int:
         return sum(len(r.invented_numbers) for r in self.results)
 
+    @property
+    def written_by_model(self) -> int:
+        """Answers whose text came from the configured LLM, not the formatter."""
+        if self.provider == "offline":
+            return 0
+        return sum(1 for r in self.results if r.provider == self.provider)
+
+    def fallback_reasons(self) -> list[tuple[str, int]]:
+        """``[(reason, count)]`` for the answers the formatter wrote instead, most common first."""
+        counts: dict[str, int] = {}
+        for result in self.results:
+            if result.fallback_reason:
+                counts[result.fallback_reason] = counts.get(result.fallback_reason, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
 
 def evaluate(composer: AnswerComposer, questions: list[dict]) -> AnswerReport:
     """Answer every question and score the answers (offline or LLM)."""
@@ -178,6 +195,7 @@ def _score(item: dict, answer: Answer) -> AnswerResult:
         disclosed=disclosed,
         expected_value_found=expected_value_found,
         invented_numbers=invented,
+        fallback_reason=answer.fallback_reason,
         sentences=validation.sentences_checked if validation else 0,
         cited=validation.sentences_cited if validation else 0,
         numbers=validation.numbers_checked if validation else 0,
@@ -357,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  cross-lingual disclosed ........ {_pct(report.cross_lingual_rate)}")
     print(f"  expected value present ......... {_pct(report.value_rate)}")
     print(f"  unverified numbers surviving ... {report.invented}")
+    if report.provider != "offline":
+        # The number that answers "is the model writing, or is it still quoting?"
+        print(f"  written by the model ........... {report.written_by_model}/{report.n}")
+        for reason, count in report.fallback_reasons():
+            print(f"      {count} x formatter instead: {reason}")
 
     if args.verbose:
         for result in report.results:

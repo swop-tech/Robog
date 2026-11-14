@@ -19,7 +19,15 @@ timeout or a malformed response: ``GeminiGenerator.draft`` returns ``None`` in
 those cases and the composer falls back to the offline formatter. A live demo
 must not be able to die because Google's free tier hiccuped.
 
+It must not fail *silently* either. The offline formatter can only quote the
+manuals, so a Gemini call that fails on every request looks exactly like "the
+bot pastes paragraphs". ``GeminiGenerator.last_error`` keeps the reason in
+plain words (wrong model ID, rejected key, quota, empty response); the composer
+puts it on the answer and ``python -m answer --check`` tests the call directly.
+
 Usage:
+    python -m answer --check               # one real call: who writes the answers?
+
     from answer.llm import build_generator
     generator = build_generator()          # Gemini if configured, else offline
     draft = generator.draft(prompt, evidence, language="it")
@@ -46,6 +54,12 @@ DEFAULT_LLM_MODEL = "gemini-3.8-flash"
 ENV_LLM_MODEL = "ROBOG_LLM_MODEL"
 ENV_LLM_PROVIDER = "ROBOG_LLM_PROVIDER"     # "gemini" | "offline"
 ENV_LLM_TIMEOUT = "ROBOG_LLM_TIMEOUT"
+
+#: Room for the answer *and* the model's reasoning. The Flash models think
+#: before they write, and those tokens are billed against this same limit: at
+#: the previous 1024 a longer question could spend the whole budget thinking
+#: and return no text at all, which then fell back to the offline formatter.
+MAX_OUTPUT_TOKENS = 8192
 
 
 class Generator(Protocol):
@@ -116,6 +130,8 @@ class GeminiGenerator:
         self.base_delay = base_delay
         self.timeout = timeout
         self._sleep = sleep_fn
+        #: Why the most recent call produced no answer (``None`` after a success).
+        self.last_error: str | None = None
 
     # -- availability ------------------------------------------------------
     @property
@@ -145,6 +161,7 @@ class GeminiGenerator:
         """Ask Gemini; ``None`` on any failure (caller falls back to offline)."""
         client = self._resolve_client()
         if client is None:
+            self.last_error = missing_gemini_reason()
             return None
 
         last_error: Exception | None = None
@@ -157,7 +174,8 @@ class GeminiGenerator:
                 )
                 text = _response_text(response)
                 if not text:
-                    raise ValueError("empty response")
+                    raise ValueError(f"empty response{_finish_detail(response)}")
+                self.last_error = None
                 return Draft(
                     text=text.strip(),
                     provider=self.name,
@@ -170,6 +188,7 @@ class GeminiGenerator:
                     break
                 self._sleep(self.base_delay * (2**attempt))
 
+        self.last_error = explain_failure(last_error, self.model)
         _log_failure(self.model, last_error)
         return None
 
@@ -204,6 +223,8 @@ def build_generator(
 
 def missing_gemini_reason() -> str:
     """Why Gemini is not in use -- shown as a note so the demo is never a mystery."""
+    if (os.environ.get(ENV_LLM_PROVIDER) or "").strip().lower() in ("offline", "deterministic", "none"):
+        return f"{ENV_LLM_PROVIDER} is set to offline"
     if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip():
         return "GEMINI_API_KEY not set"
     try:
@@ -221,26 +242,122 @@ def describe_provider(generator: Generator) -> dict:
         "model": getattr(generator, "model", None),
         "offline": name != "gemini",
         "reason": None if name == "gemini" else missing_gemini_reason(),
+        # A configured Gemini whose calls fail still answers through the
+        # formatter; this is how /health says so instead of reporting "Gemini".
+        "last_error": getattr(generator, "last_error", None),
     }
+
+
+# --------------------------------------------------------------------------
+# diagnosis: `python -m answer --check`
+# --------------------------------------------------------------------------
+def available_models(client) -> list[str]:
+    """Model IDs this key can call for text generation (``[]`` if listing fails)."""
+    names: list[str] = []
+    try:
+        for model in client.models.list():
+            actions = getattr(model, "supported_actions", None) or []
+            if actions and "generateContent" not in actions:
+                continue
+            name = str(getattr(model, "name", "") or "").removeprefix("models/")
+            if name and name not in names:
+                names.append(name)
+    except Exception:  # listing is a convenience; the diagnosis must still print
+        return []
+    # Flash models first: they are what the free tier is meant for.
+    return sorted(names, key=lambda name: ("flash" not in name, name))
+
+
+def check_llm(model: str | None = None, *, client=None) -> tuple[bool, list[str]]:
+    """Make one real call and report, step by step, who will write the answers.
+
+    Returns ``(ok, lines)``. ``ok`` is True only when the model answered, which
+    is the one condition under which the chat explains instead of quoting.
+    """
+    load_dotenv()
+    lines: list[str] = []
+    wanted = (os.environ.get(ENV_LLM_PROVIDER) or "auto").strip().lower()
+    if wanted in ("offline", "deterministic", "none"):
+        lines.append(f"FAIL  {ENV_LLM_PROVIDER}={wanted}: the offline formatter is forced.")
+        lines.append(f"      Set {ENV_LLM_PROVIDER}=auto in .env.")
+        return False, lines
+    lines.append(f"ok    {ENV_LLM_PROVIDER}={wanted}")
+
+    generator = GeminiGenerator(model, client=client, attempts=1)
+    if not generator.available:
+        reason = missing_gemini_reason()
+        lines.append(f"FAIL  {reason}")
+        if "KEY" in reason:
+            lines.append("      Create a key at https://aistudio.google.com/apikey and put")
+            lines.append("      GEMINI_API_KEY=... in .env at the repository root, then restart the API.")
+        return False, lines
+    lines.append("ok    API key found and google-genai installed")
+
+    draft = generator.draft("Reply with the single word: ready", Evidence(), language="en")
+    if draft is None:
+        lines.append(f"FAIL  {generator.model}: {generator.last_error}")
+        if "is not available for this API key" in (generator.last_error or ""):
+            models = available_models(generator._resolve_client())
+            if models:
+                lines.append("      Models this key can use (set one as ROBOG_LLM_MODEL in .env):")
+                lines.extend(f"        {name}" for name in models[:12])
+        return False, lines
+    lines.append(f"ok    {generator.model} answered: {draft.text[:60]!r}")
+    lines.append("      Answers will be written by the model.")
+    return True, lines
 
 
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
 def _generation_config():
-    """``temperature=0`` and a JSON-friendly, low-variance configuration."""
+    """Low but not zero temperature (facts stay put, wording is not robotic)."""
     try:
         from google.genai import types
     except ImportError:  # pragma: no cover - guarded by available
         return None
     try:
         return types.GenerateContentConfig(
-            temperature=0.1,
-            top_p=0.9,
-            max_output_tokens=1024,
+            temperature=0.3,
+            top_p=0.95,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
         )
     except TypeError:  # very old SDKs
         return None
+
+
+def _finish_detail(response) -> str:
+    """`` (finish_reason=MAX_TOKENS)`` when the API says why there is no text."""
+    for candidate in getattr(response, "candidates", None) or []:
+        reason = getattr(candidate, "finish_reason", None)
+        if reason:
+            return f" (finish_reason={getattr(reason, 'name', reason)})"
+    return ""
+
+
+def explain_failure(exc: Exception | None, model: str) -> str | None:
+    """A failed call in words a user can act on, with the raw error kept."""
+    if exc is None:
+        return None
+    raw = f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}"
+    message = raw.lower()
+    if "404" in message or "not_found" in message or ("not found" in message and "model" in message):
+        hint = (
+            f"the model '{model}' is not available for this API key; "
+            f"set {ENV_LLM_MODEL} to a model your key lists (python -m answer --check shows them)"
+        )
+    elif "429" in message or "quota" in message or "resource_exhausted" in message:
+        hint = "the Gemini quota or rate limit is exhausted; wait or use another key"
+    elif any(
+        marker in message
+        for marker in ("api key", "api_key", "401", "403", "permission", "unauthenticated")
+    ):
+        hint = "the API key was rejected; check GEMINI_API_KEY"
+    elif "empty response" in message:
+        hint = "the model returned no text"
+    else:
+        return raw
+    return f"{hint} [{raw}]"
 
 
 def _response_text(response) -> str:
