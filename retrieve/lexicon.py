@@ -153,6 +153,26 @@ CONCEPTS: dict[str, tuple[str, ...]] = {
         "garantie", "gewährleistung", "lebensdauer",
         "garanzia", "durata di vita",
     ),
+    "elevator": (
+        "elevator", "lift", "elevator control",
+        "aufzug", "fahrstuhl",
+        "ascensore",
+    ),
+    "advertising_screen": (
+        "advertising screen", "large screen", "display",
+        "werbebildschirm", "großer bildschirm",
+        "schermo pubblicitario",
+    ),
+    "aisle_width": (
+        "travel width", "passing width", "path clearance", "narrow aisle",
+        "durchgangsbreite", "durchfahrbreite", "pfadabstand", "wegbreite",
+        "larghezza minima", "distanziamento del percorso",
+    ),
+    "escort": (
+        "escorting", "escort", "greeting", "reception", "guiding",
+        "begleitmodus", "empfang", "führungsmodus",
+        "accoglienza", "modalità guida",
+    ),
 }
 
 # token -> {concept: weight} ; multi-word forms contribute their tokens too.

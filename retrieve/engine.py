@@ -1,23 +1,21 @@
 """The retrieval engine: route -> language policy -> hybrid ranking -> citations.
 
 This is the standalone retriever of **Bonus 01** (one module, no UI, JSON-ready
-output) and the place where three review gaps meet:
+output) and the place where four review gaps meet:
 
 * G1 exactness -- BM25 over the chunks + the structured parameter index;
-* G2 question types -- the router (lookup / advisory / default);
-* G3 + Bonus 02 multilingual -- the language policy from ``retrieve.lang``.
-
-Keyword ranking is deliberately simple and inspectable: a strict BM25 pass over the
-question's own words, a wider pass over the domain lexicon
-(``retrieve.lexicon``, which is also what bridges DE/IT questions to English
-manuals), and the parameter index folded in with reciprocal rank fusion.
+* G2 question types -- the router (figure / advisory / lookup / default) +
+  deterministic product profile cards across all 13 robots;
+* G3 + Bonus 02 multilingual -- the language policy from ``retrieve.lang``;
+* G6 visual lookup -- ``figure`` route ranking ``chunk_type="figure"`` chunks,
+  preferring overview/appearance diagrams in the user's language because labels
+  are rendered into the PNG pixels.
 
 No embedding model is required: this runs offline, on any laptop. A dense
-retriever (Chroma + the same embeddings Sujal's pipeline indexes with, see
-``retrieve/vector.py``) can be attached -- ``--vector`` on the CLI,
-``SearchEngine.from_build(..., vector="auto")``, or an injected retriever --
-and its ranked list is fused into the same reciprocal-rank-fusion, honoring
-the same language policy. Without it, behavior is unchanged.
+retriever (Chroma + embeddings, see ``retrieve/vector.py``) can be attached --
+``--vector`` on the CLI, ``SearchEngine.from_build(..., vector="auto")``, or an
+injected retriever -- and its ranked list is fused into the same
+reciprocal-rank-fusion, honoring the same language policy.
 
 Usage:
     from retrieve.engine import SearchEngine
@@ -35,10 +33,13 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ingest.profiles import appearance_figure_score
+
 from .bm25 import BM25
 from .lang import LANGUAGES, LanguagePlan, detect_language, plan
 from .lexicon import concepts_for, expand_tokens
 from .params import ParamHit, ParamIndex
+from .profiles import ADVISORY_FRAMING_WORDS, ProfileHit, ProfileIndex
 from .router import Route, route as classify
 from .text import fold, tokenize
 from .vector import ChromaRetriever, DenseHit, VectorStoreUnavailable
@@ -47,6 +48,31 @@ from .vector import ChromaRetriever, DenseHit, VectorStoreUnavailable
 GENERIC_PRODUCT_WORDS = {
     "pudu", "pudubot", "user", "manual", "series", "robot",
 }
+
+# Visual-intent words asking *for* a picture/diagram rather than naming a
+# specific component inside the picture.
+FIGURE_META_WORDS: frozenset[str] = frozenset(
+    """
+    picture pictures photo photos image images figure figures diagram diagrams
+    illustration illustrations view views look looks looking like show shows showing
+    see display appearance exterior overview full whole clear nice complete
+    bild bilder foto fotos abbildung abbildungen zeichnung ansicht aussehen
+    erscheinungsbild aussenansicht uberblick zeig zeige zeigen sieht sehen aus
+    mir mich uns ihnen vom beim mal ganz komplett
+    immagine immagini figura diagramma schema vista aspetto panoramica
+    mostra mostrami vedere vedi fammi fatto appare bella chiara completa intera
+    dello della dell sul sulla sullo com cos dov qual
+    """.split()
+)
+
+# Words indicating the user explicitly asks about an accessory rather than a robot.
+ACCESSORY_QUERY_WORDS: frozenset[str] = frozenset(
+    """
+    accessory accessories station dock docking charger gateway pager beeper
+    zubehor ladestation dockingstation arbeitsstation ladegerat rufsender
+    accessori stazione caricabatterie
+    """.split()
+)
 
 # Reciprocal-rank-fusion constant (standard value from the IR literature).
 RRF_K = 60
@@ -83,6 +109,17 @@ class Hit:
         return self.metadata.get("image")
 
     @property
+    def labels(self) -> list[str]:
+        """Numbered callout labels printed in a figure chunk, if present."""
+        if "\nLabels:" in self.text:
+            raw = self.text.split("\nLabels:", 1)[1]
+        elif self.text.startswith("Labels:"):
+            raw = self.text.split("Labels:", 1)[1]
+        else:
+            return []
+        return [item.strip() for item in raw.split(";") if item.strip()]
+
+    @property
     def section(self) -> str:
         number = self.metadata.get("section_number")
         title = self.metadata.get("section_title") or self.metadata.get("section", "")
@@ -104,7 +141,7 @@ class Hit:
         return ", ".join(p for p in parts if p)
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "chunk_id": self.chunk_id,
             "score": round(self.score, 4),
             "text": self.text,
@@ -113,9 +150,11 @@ class Hit:
             "product": self.product,
             "chunk_type": self.chunk_type,
             "image": self.image,
+            "labels": self.labels,
             "sources": self.sources,
             "metadata": self.metadata,
         }
+        return payload
 
 
 @dataclass
@@ -127,19 +166,20 @@ class SearchResult:
     policy: str
     hits: list[Hit] = field(default_factory=list)
     params: list[ParamHit] = field(default_factory=list)
+    profiles: list[ProfileHit] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     tiers_used: list[str] = field(default_factory=list)
     products: list[str] = field(default_factory=list)
-    coverage: float = 0.0  # share of the question's content words found in hit #1
+    coverage: float = 0.0  # share of the question's content words found in top hits
 
     @property
     def confidence(self) -> str:
-        """How well the corpus matches the question -- '' when nothing matched.
+        """How well the corpus matches the question -- 'none' when nothing matched.
 
         Used later by the answer composer to say "this is not in the manuals"
         instead of inventing something (faithfulness, review gap G5).
         """
-        if not self.hits:
+        if not self.hits and not self.profiles:
             return "none"
         if self.coverage >= 0.6:
             return "high"
@@ -155,7 +195,11 @@ class SearchResult:
     @property
     def cross_lingual(self) -> bool:
         """True when the answer must be composed from another language's sources."""
-        return bool(self.language) and any(hit.language != self.language for hit in self.hits)
+        if not self.language:
+            return False
+        return any(hit.language != self.language for hit in self.hits) or any(
+            prof.language != self.language for prof in self.profiles
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -174,6 +218,7 @@ class SearchResult:
                 {"parameter": p.parameter, "value": p.value, "citation": p.citation, **p.record}
                 for p in self.params
             ],
+            "profiles": [p.to_dict() for p in self.profiles],
             "hits": [hit.to_dict() for hit in self.hits],
         }
 
@@ -182,21 +227,27 @@ class SearchResult:
 # Engine
 # --------------------------------------------------------------------------
 class SearchEngine:
-    """Hybrid retriever over the chunk corpus (+ parameter index)."""
+    """Hybrid retriever over the chunk corpus (+ parameter & profile indexes)."""
 
     def __init__(
         self,
         chunks: list[dict],
         params: ParamIndex | None = None,
         *,
+        profiles: ProfileIndex | None = None,
         retriever: ChromaRetriever | None = None,
     ):
         self.chunks = chunks
         self.by_id = {chunk["id"]: chunk for chunk in chunks}
         self.params = params or ParamIndex([])
+        self.profiles = (
+            profiles
+            if profiles is not None
+            else ProfileIndex.from_chunks_and_params(chunks, self.params.records)
+        )
         # Optional dense (vector) retriever. When None, the engine behaves
-        # exactly as before (offline keyword retrieval). Attach one to fuse
-        # Chroma's ranked list into the same RRF fusion.
+        # offline in keyword mode. Attach one to fuse Chroma's ranked list into
+        # the same RRF fusion.
         self.retriever = retriever
         self.retriever_note: str | None = None
         self.params_note: str | None = None
@@ -211,10 +262,14 @@ class SearchEngine:
         self.bm25 = BM25(docs)
 
         self.product_languages: dict[str, set[str]] = defaultdict(set)
+        self.product_doc_type: dict[str, str] = {}
         self._alias_products: dict[str, set[str]] = defaultdict(set)
         for chunk in chunks:
             meta = chunk.get("metadata", {})
-            self.product_languages[meta.get("product", "")].add(meta.get("language", ""))
+            prod = meta.get("product", "")
+            self.product_languages[prod].add(meta.get("language", ""))
+            if prod and prod not in self.product_doc_type:
+                self.product_doc_type[prod] = meta.get("doc_type", "unknown")
         for product in self.product_languages:
             for alias in self._aliases_for(product):
                 self._alias_products[alias].add(product)
@@ -230,18 +285,10 @@ class SearchEngine:
         chunks_path: str | Path = "build/chunks.jsonl",
         params_path: str | Path = "build/params.jsonl",
         *,
+        profiles_path: str | Path = "build/profiles.jsonl",
         vector: str | ChromaRetriever | None = None,
     ) -> "SearchEngine":
-        """Build the engine from the pipeline's build directory.
-
-        ``vector``:
-
-        * ``None`` (default) -- keyword retrieval only, fully offline;
-        * ``"auto"`` -- connect to the existing Chroma store (see
-          ``retrieve/vector.py``); if it is not built yet, the engine silently
-          keeps working in keyword mode and says so in ``retriever_note``;
-        * a ``ChromaRetriever`` (or compatible object) -- use it directly.
-        """
+        """Build the engine from the pipeline's build directory."""
         chunks_file = Path(chunks_path)
         if not chunks_file.exists():
             raise SystemExit(
@@ -249,10 +296,19 @@ class SearchEngine:
             )
         with chunks_file.open(encoding="utf-8") as fh:
             chunks = [json.loads(line) for line in fh if line.strip()]
-        engine = cls(chunks, ParamIndex.from_jsonl(params_path))
+        param_index = ParamIndex.from_jsonl(params_path)
+        prof_file = Path(profiles_path)
+        profile_index = (
+            ProfileIndex.from_jsonl(prof_file)
+            if prof_file.exists()
+            else ProfileIndex.from_chunks_and_params(chunks, param_index.records)
+        )
+        engine = cls(chunks, param_index, profiles=profile_index)
         if not Path(params_path).exists():
-            engine.params_note = (f"parameter index not found: {params_path}; "
-                                  "exact parameter lookup disabled -- run python -m ingest.run")
+            engine.params_note = (
+                f"parameter index not found: {params_path}; "
+                "exact parameter lookup disabled -- run python -m ingest.run"
+            )
         if vector is None:
             return engine
         if isinstance(vector, str):
@@ -284,14 +340,25 @@ class SearchEngine:
                 return {lang for lang in langs if lang}
         return {lang for langs in self.product_languages.values() for lang in langs if lang}
 
+    def _matched_product_groups(self, query: str) -> list[list[str]]:
+        """Non-overlapping product alias matches in `query`, longest alias first."""
+        folded = fold(query)
+        occupied: list[tuple[int, int]] = []
+        groups: list[list[str]] = []
+        for pattern, alias in self._alias_patterns:
+            for match in pattern.finditer(folded):
+                start, end = match.span()
+                if any(os <= start and end <= oe for os, oe in occupied):
+                    continue
+                occupied.append((start, end))
+                groups.append(sorted(self._alias_products[alias]))
+        return groups
+
     def mentioned_products(self, query: str) -> list[str]:
         """Products named in the question (a code like "CC1" may mean several)."""
-        folded = fold(query)
         found: list[str] = []
-        for pattern, alias in self._alias_patterns:
-            if not pattern.search(folded):
-                continue
-            for product in sorted(self._alias_products[alias]):
+        for group in self._matched_product_groups(query):
+            for product in group:
                 if product not in found:
                     found.append(product)
         return found
@@ -310,6 +377,16 @@ class SearchEngine:
         if best <= 0:
             return products
         return [product for score, product in scored if score == best]
+
+    def _resolve_products(self, query: str, expansion: list[str]) -> list[str]:
+        """Resolve each product mention in `query` independently so 'BellaBot vs
+        KettyBot Pro' keeps both products instead of dropping the 1-word name."""
+        resolved: list[str] = []
+        for group in self._matched_product_groups(query):
+            for prod in self._disambiguate(group, expansion):
+                if prod not in resolved:
+                    resolved.append(prod)
+        return resolved
 
     def _allowed_ids(
         self,
@@ -337,12 +414,6 @@ class SearchEngine:
         return allowed
 
     def _chunk_view(self, chunk_id: str, dense_by_id: dict[str, DenseHit]) -> tuple[str, dict]:
-        """(text, metadata) for a chunk id.
-
-        Prefers the chunk corpus (``build/chunks.jsonl``) so citations have one
-        source of truth; falls back to what the vector store holds (the same
-        rows, indexed by id) when the two are out of sync.
-        """
         chunk = self.by_id.get(chunk_id)
         if chunk is not None:
             return chunk.get("text", ""), chunk.get("metadata", {})
@@ -357,11 +428,6 @@ class SearchEngine:
         allowed: set[str] | None,
         k: int,
     ) -> list[DenseHit]:
-        """Ask the vector store for candidates; degrade gracefully on failure.
-
-        A demo laptop without the store, the embedding model or the network must
-        still answer -- the keyword path carries on and the note says why.
-        """
         if self.retriever is None:
             return []
         try:
@@ -375,6 +441,14 @@ class SearchEngine:
             self.retriever_note = f"dense retrieval disabled: unexpected {type(exc).__name__}: {exc}"
             return []
 
+    def _lang_rank(self, lang: str, preference: list[str] | None) -> int:
+        if not preference:
+            return 0
+        try:
+            return preference.index(lang)
+        except ValueError:
+            return len(preference)
+
     def _rank_tier(
         self,
         tokens: list[str],
@@ -383,6 +457,7 @@ class SearchEngine:
         allowed: set[str] | None,
         k: int,
         dense: list[DenseHit] | None = None,
+        preference: list[str] | None = None,
     ) -> list[Hit]:
         """BM25 strict pass + lexicon pass + dense pass, fused with RRF."""
         candidate_k = max(k * 3, 12)
@@ -405,16 +480,13 @@ class SearchEngine:
             if "bm25" not in sources[hit.chunk_id]:
                 sources[hit.chunk_id].append("lexicon")
         for rank, hit in enumerate(dense, start=1):
-            # Dense is a co-equal retriever: same RRF weight as the BM25 pass.
             scores[hit.chunk_id] += 1.0 / (RRF_K + rank)
             sources[hit.chunk_id].append("vector")
 
-        # Drop ids that exist in no source of truth (stale index vs corpus).
         for chunk_id in list(scores):
             if chunk_id not in self.by_id and chunk_id not in dense_by_id:
                 del scores[chunk_id]
 
-        # Chunks whose own heading contains query terms are strong candidates.
         if len(tokens) > 1:
             query_set = set(tokens)
             for chunk_id in scores:
@@ -425,7 +497,14 @@ class SearchEngine:
                     overlap = len(query_set & title_tokens) / len(query_set)
                     scores[chunk_id] *= 1 + 1.0 * overlap
 
-        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:candidate_k]
+        ranked = sorted(
+            scores.items(),
+            key=lambda item: (
+                -round(item[1], 8),
+                self._lang_rank(self._chunk_view(item[0], dense_by_id)[1].get("language", ""), preference),
+                item[0],
+            ),
+        )[:candidate_k]
         hits: list[Hit] = []
         for rank, (chunk_id, score) in enumerate(ranked, start=1):
             text, meta = self._chunk_view(chunk_id, dense_by_id)
@@ -437,6 +516,57 @@ class SearchEngine:
                     score=score,
                     rank=rank,
                     sources=sources[chunk_id],
+                )
+            )
+        return hits
+
+    def _rank_appearance_figures(
+        self,
+        allowed: set[str] | None,
+        *,
+        k: int,
+        preference: list[str] | None = None,
+        dense: list[DenseHit] | None = None,
+    ) -> list[Hit]:
+        """Rank ``chunk_type="figure"`` chunks when the user asks for a general
+        picture/diagram of a product ("Show me a picture of the BellaBot")."""
+        candidate_ids = allowed if allowed is not None else set(self.by_id)
+        dense_by_id = {d.chunk_id: d for d in (dense or ())}
+        dense_ranks = {d.chunk_id: rank for rank, d in enumerate(dense or (), start=1)}
+
+        scored: list[tuple[str, float, list[str]]] = []
+        for chunk_id in candidate_ids:
+            chunk = self.by_id.get(chunk_id)
+            if chunk is None:
+                continue
+            raw_app = appearance_figure_score(chunk)
+            if raw_app < 0:
+                continue
+            score = max(0.005, (raw_app + 5.0) / 150.0)
+            srcs = ["figure"]
+            if chunk_id in dense_ranks:
+                score += 0.5 / (RRF_K + dense_ranks[chunk_id])
+                srcs.append("vector")
+            scored.append((chunk_id, score, srcs))
+
+        scored.sort(
+            key=lambda item: (
+                -round(item[1], 8),
+                self._lang_rank(self.by_id[item[0]].get("metadata", {}).get("language", ""), preference),
+                item[0],
+            )
+        )
+        hits: list[Hit] = []
+        for rank, (chunk_id, score, srcs) in enumerate(scored[: max(k * 3, 12)], start=1):
+            text, meta = self._chunk_view(chunk_id, dense_by_id)
+            hits.append(
+                Hit(
+                    chunk_id=chunk_id,
+                    text=text,
+                    metadata=meta,
+                    score=score,
+                    rank=rank,
+                    sources=srcs,
                 )
             )
         return hits
@@ -477,6 +607,17 @@ class SearchEngine:
             kept.append(hit)
         return kept
 
+    @staticmethod
+    def _is_advisory_noise_chunk(meta: dict) -> bool:
+        """Safety warnings (§1) and routine maintenance tables (§4/§6) should
+        not masquerade as product recommendations on advisory queries."""
+        sec_num = str(meta.get("section_number") or "")
+        if sec_num.startswith("1"):
+            return True
+        if meta.get("chunk_type") == "table" and sec_num.startswith(("4", "6", "7")):
+            return True
+        return False
+
     # -- search ------------------------------------------------------------
     def search(
         self,
@@ -491,18 +632,15 @@ class SearchEngine:
         cross_lingual_fallback: bool = True,
         dedupe_translations: bool = True,
     ) -> SearchResult:
-        """Retrieve the best chunks for a question.
-
-        ``language`` forces the question language (the UI can pass it); otherwise
-        it is detected. ``follow_user_language=False`` disables the language
-        policy entirely -- used by the evaluation harness as a baseline.
-        """
+        """Retrieve the best chunks (and parameter/profile rows) for a question."""
         query = (query or "").strip()
         tokens = tokenize(query)
         detected = language or detect_language(query)
-        products = [product] if product else self.mentioned_products(query)
-        if len(products) > 1:
-            products = self._disambiguate(products, expand_tokens(tokenize(query)))
+        products = (
+            [product]
+            if product
+            else self._resolve_products(query, expand_tokens(tokenize(query)))
+        )
         available = self.languages_for(products)
         routed: Route = classify(query, detected)
 
@@ -518,35 +656,95 @@ class SearchEngine:
                 f"(available: {', '.join(sorted(available)).upper()})"
             )
 
-        template = dict(products=products, doc_type=doc_type, chunk_type=chunk_type)
+        effective_chunk_type = chunk_type or ("figure" if routed.is_figure else None)
+        explicit_accessory = (
+            doc_type == "accessory"
+            or any(self.product_doc_type.get(p) == "accessory" for p in products)
+            or bool(set(tokens) & ACCESSORY_QUERY_WORDS)
+        )
+        has_robot_corpus = "robot" in self.product_doc_type.values()
+        effective_doc_type = doc_type or (
+            "robot" if (routed.is_advisory and not explicit_accessory and has_robot_corpus) else None
+        )
+
+        template = dict(
+            products=products,
+            doc_type=effective_doc_type,
+            chunk_type=effective_chunk_type,
+        )
         if follow_user_language:
             policy: LanguagePlan = plan(detected, available)
-            if not cross_lingual_fallback:  # baseline: hard language filter
+            if not cross_lingual_fallback:
                 policy.tiers = [detected] if detected else [None]
                 policy.cross_lingual = False
         else:
             policy = LanguagePlan(user_language=detected, tiers=[None], available=available)
 
+        preference = ([detected] if detected else []) + [
+            lang for lang in LANGUAGES if lang != detected
+        ]
+
         # The product name is enforced by the metadata filter, so its tokens must
-        # not dominate BM25 (every hit already matches the product).
-        name_tokens = {tok for product in products for tok in tokenize(product)}
-        scoring_tokens = [tok for tok in tokens if tok not in name_tokens] or tokens
-        expansion = expand_tokens(scoring_tokens)
+        # not dominate BM25 (every hit already matches the product). Include
+        # translated forms of product-type words ("Charging Station" <-> "stazione di ricarica").
+        raw_name_tokens = [tok for prod in products for tok in tokenize(prod)]
+        name_tokens = set(expand_tokens(raw_name_tokens)) if raw_name_tokens else set()
+        scoring_tokens = [tok for tok in tokens if tok not in set(raw_name_tokens)] or tokens
+        advisory_pure_comparison = False
+        if routed.is_advisory:
+            advisory_content = [tok for tok in scoring_tokens if tok not in ADVISORY_FRAMING_WORDS]
+            if advisory_content:
+                scoring_tokens = advisory_content
+            elif products:
+                advisory_pure_comparison = True
+
+        figure_topic_tokens = (
+            [tok for tok in scoring_tokens if tok not in FIGURE_META_WORDS and tok not in name_tokens]
+            if routed.is_figure
+            else scoring_tokens
+        )
+        active_tokens = figure_topic_tokens if routed.is_figure else scoring_tokens
+        expansion = expand_tokens(active_tokens) if active_tokens else expand_tokens(scoring_tokens)
+
         tiers_used: list[str] = []
         hits: list[Hit] = []
-        # Accept the user's language when it has a usable ranking; only fall back
-        # when it is empty or clearly weaker (same scorer, so scores compare).
-        min_hits = max(2, k // 4)
+        min_hits = 1 if routed.is_figure else max(2, k // 4)
         best_top = 0.0
+
         for tier in policy.tiers:
             allowed = self._allowed_ids(language=tier, **template)
             if allowed is not None and not allowed:
                 tiers_used.append(f"{tier or 'any'}:0")
                 continue
             dense_hits = self._dense_hits(query, allowed, k=max(k * 3, 12))
-            tier_hits = self._rank_tier(
-                scoring_tokens, expansion, allowed=allowed, k=max(k * 2, 12), dense=dense_hits
-            )
+
+            if routed.is_figure and not figure_topic_tokens:
+                tier_hits = self._rank_appearance_figures(
+                    allowed, k=max(k * 2, 12), preference=preference, dense=dense_hits
+                )
+            else:
+                tier_hits = self._rank_tier(
+                    active_tokens,
+                    expansion,
+                    allowed=allowed,
+                    k=max(k * 2, 12),
+                    dense=dense_hits,
+                    preference=preference,
+                )
+                if routed.is_figure and tier_hits:
+                    for hit in tier_hits:
+                        chunk = self.by_id.get(hit.chunk_id)
+                        if chunk is not None:
+                            app_bonus = max(0.0, appearance_figure_score(chunk))
+                            hit.score *= 1.0 + 0.025 * app_bonus
+                    tier_hits.sort(
+                        key=lambda h: (
+                            -round(h.score, 8),
+                            self._lang_rank(h.language, preference),
+                            h.chunk_id,
+                        )
+                    )
+
             tiers_used.append(f"{tier or 'any'}:{len(tier_hits)}")
             if not tier_hits:
                 continue
@@ -556,7 +754,7 @@ class SearchEngine:
                 if len(hits) >= min_hits:
                     break
                 continue
-            if top > best_top * 1.25:      # clearly better across languages
+            if top > best_top * 1.25:
                 hits, best_top = tier_hits, top
             break
 
@@ -566,11 +764,74 @@ class SearchEngine:
             provider = getattr(self.retriever, "provider", "vector")
             notes.append(f"dense retrieval on ({provider})")
 
+        # -- structured product profile cards (gap G2) ----------------------
+        profiles: list[ProfileHit] = []
+        if routed.is_advisory and not explicit_accessory and self.profiles.records:
+            profiles = self.profiles.search(
+                query,
+                k=max(k, 6),
+                language=detected,
+                products=products or None,
+                follow_user_language=follow_user_language,
+                cross_lingual_fallback=cross_lingual_fallback,
+                extra_tokens=expansion,
+            )
+            if profiles:
+                fused_advisory: dict[str, float] = defaultdict(float)
+                for hit in hits:
+                    penalty = 0.35 if self._is_advisory_noise_chunk(hit.metadata) else 1.0
+                    fused_advisory[hit.chunk_id] += hit.score * penalty
+
+                known_ids = {hit.chunk_id for hit in hits}
+                profile_sourced: set[str] = set()
+                for p_rank, prof in enumerate(profiles, start=1):
+                    rec = prof.record
+                    ov_cid = rec.get("overview_chunk_id")
+                    spec_cid = rec.get("spec_chunk_id")
+                    ov_sec = str(
+                        self.by_id.get(ov_cid or "", {}).get("metadata", {}).get("section") or ""
+                    )
+                    ov_is_safety_merged = ov_sec.startswith("1.")
+                    pairs = (
+                        ((spec_cid, 1.15), (ov_cid, 0.35))
+                        if ov_is_safety_merged
+                        else ((ov_cid or spec_cid, 1.15), (spec_cid, 0.7))
+                    )
+                    for cid, weight in pairs:
+                        if not cid or cid not in self.by_id:
+                            continue
+                        fused_advisory[cid] += weight / (RRF_K + p_rank)
+                        profile_sourced.add(cid)
+                        if cid not in known_ids:
+                            chunk = self.by_id[cid]
+                            hits.append(
+                                Hit(
+                                    chunk_id=cid,
+                                    text=chunk.get("text", ""),
+                                    metadata=chunk.get("metadata", {}),
+                                    score=0.0,
+                                    rank=len(hits) + 1,
+                                    sources=["profile"],
+                                )
+                            )
+                            known_ids.add(cid)
+
+                for hit in hits:
+                    hit.score = fused_advisory[hit.chunk_id]
+                    if hit.chunk_id in profile_sourced and "profile" not in hit.sources:
+                        hit.sources.append("profile")
+                hits.sort(
+                    key=lambda hit: (
+                        -round(hit.score, 8),
+                        self._lang_rank(hit.language, preference),
+                        hit.chunk_id,
+                    )
+                )
+
+        # -- structured parameter index (gap G1) ----------------------------
         params: list[ParamHit] = []
-        # "Qual è la velocità massima del FlashBot?" has no English lookup cue,
-        # but it *is* a parameter question -- the lexicon knows "velocità".
         parameter_shaped = any(concepts_for(token) for token in scoring_tokens)
-        if routed.is_lookup or parameter_shaped or any(c.isdigit() for c in query):
+        if not routed.is_figure and (routed.is_lookup or parameter_shaped or any(c.isdigit() for c in query)):
             params = self.params.search(
                 query,
                 k=5,
@@ -579,12 +840,13 @@ class SearchEngine:
                 extra_tokens=expansion,
             )
             if not routed.is_lookup:
-                # Keep only specification-style rows (a value with a number or
-                # unit); prose rows belong to the chunk path, not the index.
                 params = [
                     p for p in params
                     if p.record.get("value_number") is not None or p.record.get("unit")
                 ]
+            if routed.is_advisory and profiles:
+                top_profile_products = {p.product for p in profiles[:4]}
+                params = [p for p in params if p.record.get("product") in top_profile_products]
             param_chunk_ids = [p.record.get("chunk_id") for p in params if p.record.get("chunk_id")]
             if param_chunk_ids:
                 fused: dict[str, float] = defaultdict(float)
@@ -611,37 +873,52 @@ class SearchEngine:
                     hit.score = fused[hit.chunk_id]
                     if hit.chunk_id in param_chunk_ids and "params" not in hit.sources:
                         hit.sources.append("params")
-                hits.sort(key=lambda hit: (-hit.score, hit.chunk_id))
+                hits.sort(
+                    key=lambda hit: (
+                        -round(hit.score, 8),
+                        self._lang_rank(hit.language, preference),
+                        hit.chunk_id,
+                    )
+                )
 
-        preference = ([detected] if detected else []) + [
-            lang for lang in LANGUAGES if lang != detected
-        ]
         if dedupe_translations:
             hits = self._dedupe_translations(hits, preference)
-        if routed.is_advisory:
-            hits = self._diversify(hits, k)
+        if routed.is_advisory or (routed.is_figure and not products and not figure_topic_tokens):
+            per_prod = 1 if routed.is_figure else 2
+            hits = self._diversify(hits, k, per_product=per_prod)
         hits = hits[:k]
         for rank, hit in enumerate(hits, start=1):
             hit.rank = rank
 
-        if detected and any(hit.language != detected for hit in hits):
-            cross = sorted({hit.language.upper() for hit in hits if hit.language != detected})
-            notes.append(f"answer language {detected.upper()}; sources also in {', '.join(cross)}")
+        cross_langs = {
+            hit.language.upper() for hit in hits if detected and hit.language and hit.language != detected
+        } | {
+            prof.language.upper() for prof in profiles if detected and prof.language and prof.language != detected
+        }
+        if detected and cross_langs:
+            notes.append(f"answer language {detected.upper()}; sources also in {', '.join(sorted(cross_langs))}")
 
         coverage = 0.0
-        if hits and scoring_tokens:
-            # A question word counts as covered when one of the best hits has it
-            # *or* any of its lexicon forms ("payload" -> "load capacity").
-            hit_tokens = set(
-                tokenize(" ".join(hit.text + " " + hit.metadata.get("section_title", "") for hit in hits[:3]))
-            )
-            unique_tokens = list(dict.fromkeys(scoring_tokens))
+        if routed.is_figure and not figure_topic_tokens:
+            if hits:
+                coverage = 1.0 if products else 0.8
+        elif advisory_pure_comparison and profiles:
+            matched_prods = {p.product for p in profiles}
+            coverage = sum(1 for p in products if p in matched_prods) / max(len(products), 1)
+        elif hits and active_tokens:
+            evidence_parts = [hit.text + " " + hit.metadata.get("section_title", "") for hit in hits[:3]]
+            if profiles:
+                evidence_parts.extend(prof.record.get("card_text", "") + " " + " ".join(prof.record.get("environments", ())) for prof in profiles[:3])
+            hit_tokens = set(tokenize(" ".join(evidence_parts)))
+            unique_tokens = list(dict.fromkeys(active_tokens))
             covered = sum(
                 1
                 for token in unique_tokens
                 if token in hit_tokens or any(form in hit_tokens for form in expand_tokens([token]))
             )
             coverage = covered / len(unique_tokens)
+        elif profiles and not active_tokens:
+            coverage = 0.8
 
         return SearchResult(
             query=query,
@@ -651,6 +928,7 @@ class SearchEngine:
             policy=policy.describe(),
             hits=hits,
             params=params,
+            profiles=profiles,
             notes=notes,
             tiers_used=tiers_used,
             products=products,

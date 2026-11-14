@@ -18,16 +18,18 @@ harness currently measures the keyword-only baseline, not dense retrieval.
 ```
 question (EN/DE/IT)
    │
-   ├─ 1. language detection        retrieve/lang.py     deterministic, no model
-   ├─ 2. query routing            retrieve/router.py    lookup | advisory | default
-   ├─ 3. domain lexicon           retrieve/lexicon.py   payload ≈ Zuladung ≈ carico
+   ├─ 1. language detection        retrieve/lang.py      deterministic, no model
+   ├─ 2. query routing             retrieve/router.py    figure | advisory | lookup | default
+   ├─ 3. domain lexicon            retrieve/lexicon.py   payload ≈ Zuladung ≈ carico
    │
-   ├─ 4. BM25 over chunks         retrieve/bm25.py      strict pass + lexicon pass
-   ├─ 5. parameter index          retrieve/params.py    build/params.jsonl → value + citation
+   ├─ 4. BM25 over chunks          retrieve/bm25.py      strict pass + lexicon pass
+   ├─ 5. parameter index           retrieve/params.py    build/params.jsonl → value + citation
+   ├─ 6. product profile cards     retrieve/profiles.py  build/profiles.jsonl → 13-robot comparison
+   ├─ 7. appearance/figure ranker  retrieve/engine.py    section 2.2/2.3 diagrams + callout labels
    │
-   ├─ 6. reciprocal rank fusion (chunks + parameter chunks)
-   ├─ 7. translation dedupe + advisory diversification
-   └─ 8. citations + confidence   Hit.citation, SearchResult.confidence
+   ├─ 8. reciprocal rank fusion (chunks + parameter chunks + profile overview/spec chunks)
+   ├─ 9. translation dedupe + advisory/figure diversification
+   └─ 10. citations + confidence   Hit.citation, Hit.labels, SearchResult.confidence
 ```
 
 ### 1. Language policy (Bonus 02)
@@ -45,12 +47,13 @@ The plan skips tier 1 entirely when the product has no manual in the user's lang
 The answer language is always the user's; `SearchResult.cross_lingual` tells the composer that
 the evidence is in another language.
 
-### 2. Routing (gap G2)
+### 2. Routing (gaps G1, G2, G6)
 
 | Route | Signal | Strategy |
 |---|---|---|
+| `figure` | "show me a picture", "what does X look like", "Zeig mir ein Bild", "Wie sieht X aus", "Mostrami una foto", "Com'è fatto" | filters `chunk_type="figure"`, strips visual framing words, ranks `§2.2/§2.3` labeled appearance diagrams first for overview queries (or BM25 + diagram bonus for specific callouts like emergency stop switch), and honors language policy so PNG pixel labels match the user's language |
+| `advisory` | "which robot", "fits my", "Welcher Roboter eignet sich", "Quale robot è adatto", "A vs B" | scores all 13 robot profile cards (`ProfileIndex`: scenario tags + BM25 + numeric kg/cm constraints), scopes chunks to `doc_type="robot"` unless accessories are requested, demotes `§1/§4/§6` safety/maintenance noise, fuses top profile overview/spec chunks via RRF, and diversifies up to 2 chunks per robot |
 | `lookup` | "how much", "Wie hoch", "Quanto", a quoted value, or any word the lexicon knows | parameter index first, BM25 second, values quoted verbatim |
-| `advisory` | "which robot", "Welcher Roboter eignet sich", "Quale robot consiglia", "A vs B" | broader search, max 2 chunks per product so the answer can compare |
 | `default` | everything else | plain hybrid search |
 
 ### 3. Domain lexicon
@@ -61,25 +64,27 @@ manuals) **and** acts as a cross-lingual bridge: a German question expands to En
 which is how a German question finds an English-only manual.
 Missing words fall back to a prefix match ("consuma" → "consumption").
 
-## Small keyword-only benchmark
+## Keyword-only benchmark (28 questions)
 
-`python -m retrieve.evaluate` (20 questions: both personas, EN/DE/IT, figures, procedures, three
-Italian questions on manuals that have no Italian):
+`python -m retrieve.evaluate` (28 questions across EN/DE/IT: exact parameter lookups, visual/figure
+requests, procedures, fleet-wide advisory & head-to-head comparisons, plus five Italian questions
+requiring cross-lingual fallback to EN/DE manuals):
 
-| Configuration | Pass@8 | MRR | Hits in question language | Cross-language duplicates | Param index hit |
-|---|---|---|---|---|---|
-| `no_policy` — every language at once (naive RAG) | 100% | 0.88 | 68% | 12% | 100% |
-| `hard_filter` — user's language only | 85% | 0.78 | 85% | 0% | 80% |
-| **`policy` — same language first, fallback** | **100%** | **0.90** | **85%** | **0%** | **100%** |
+| Configuration | Pass@8 | MRR | Hits in question language | Cross-language duplicates | Param index hit | Profile card hit |
+|---|---|---|---|---|---|---|
+| `no_policy` — every language at once (naive RAG) | 100% | 0.92 | 52% | 18% | 100% | 100% |
+| `hard_filter` — user's language only | 82% | 0.82 | 86% | 0% | 80% | 86% |
+| **`policy` — same language first, fallback** | **100%** | **0.95** | **85%** | **0%** | **100%** | **100%** |
 
-* These are automated keyword/product checks, not proof of answer correctness. Advisory cases
-  check product diversity only. Parameter and cross-language expectations are checked when annotated.
-* A hard language filter loses **15 points of pass rate**: the three Italian questions about
-  Italian-less manuals return nothing. That is the Bonus 02 case, not an edge case.
-* No policy costs **17 points of same-language context** and fills 12% of the slots with the same
-  passage in another language — the dilution argument, quantified.
-* The parameter index matches the annotated keywords for 10/10 specification cases. This does
-  not independently verify that every returned parameter value or citation is correct.
+* Checks enforce annotated keywords, product, chunk type, route (`figure`, `advisory`), image path
+  presence, exact parameter matches, structured product-profile card matches, and cross-language
+  expectations.
+* A hard language filter loses **18 points of pass rate**: Italian lookup, figure, and elevator
+  advisory questions needing FlashBot/Pager fail without fallback.
+* No policy drops same-language hits from **85% → 52%** and fills **18%** of top-k slots with
+  duplicate translations of passages already returned.
+* Both the parameter index (`100%`) and product profile index (`100%`) satisfy all annotated
+  specification and advisory expectations under `policy`.
 
 Re-run and regenerate the report: `python -m retrieve.evaluate --out build/eval-report.md`.
 
@@ -117,12 +122,10 @@ client, a Telegram bot or a curl call is the second (Bonus 01).
 | Limit | Next step |
 |---|---|
 | No paraphrase matching ("the robot won't start" vs "power-on failure") | dense retriever (multilingual-e5 / gemini-embedding) as another ranked list in the fusion |
-| Advisory answers need cross-document synthesis, not just spread-out chunks | product profile cards (gap G2) on top of the same engine |
 | A large troubleshooting table can outrank the focused procedure on procedural questions | acceptable while the composer reads the top-k; a dense retriever helps here too |
 | `confidence` is recall-based, not calibrated | refine together with the answer composer + evidence validation (G5) |
-| Lexicon covers parameters, not procedures | grows from eval misses; keep it small and explainable |
-| No picture intent: `"Show me a picture of the BellaBot"` returns **0 hits** (BM25 matches words, not visual intent; the product name alone leaves nothing to score) | figure route + media endpoint — deferred, specced in [`pipeline-review.md` §9a](pipeline-review.md#9a-deferred-making-images-actually-usable-g6) |
-| Figure hits carry `image` but nothing serves or renders the PNG | `GET /media/{doc_id}/{filename}` in the API step |
+| Lexicon covers parameters and core scenarios, not every procedure | grows from eval misses; keep it small and explainable |
+| Figure hits carry `image` + `labels` and `figure` routing selects language-appropriate PNGs, but nothing serves or renders the PNG over HTTP yet | `GET /media/{doc_id}/{filename}` in the FastAPI step |
 
 ## Next
 

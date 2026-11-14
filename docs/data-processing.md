@@ -7,8 +7,8 @@
 ## One command
 
 ```bash
-python -m ingest.run --data data          # -> build/chunks.jsonl, build/params.jsonl, build/data-report.md
-python -m unittest tests.test_ingest -v  # 40 tests, stdlib only
+python -m ingest.run --data data          # -> build/chunks.jsonl, build/params.jsonl, build/profiles.jsonl, build/data-report.md
+python -m unittest tests.test_ingest -v  # stdlib only
 ```
 
 Exit code is non-zero if the validation gate finds an error, so this can run in CI before
@@ -20,6 +20,7 @@ embedding ever happens.
 |---|---|
 | `build/chunks.jsonl` | One retrieval chunk per line: `{"id", "text", "metadata"}` — what phase 2 embeds and indexes |
 | `build/params.jsonl` | **Structured parameter index** (gap G1): one row per table row — `product → parameter → value/unit → source page`, linked back to its chunk |
+| `build/profiles.jsonl` | **Product profile cards** (gap G2): one structured card per `(robot, language)` — category, dimensions, weight, payload/tanks, battery/runtime, speed, min passage width, use-case summary, appearance diagram, and source citations |
 | `build/data-report.md` | The validation report (counts, coverage, warnings/errors) |
 
 `build/` is git-ignored — regenerate it from `data/` at any time.
@@ -34,6 +35,7 @@ embedding ever happens.
 | Per language | en 466 · de 469 · it 416 |
 | Robot vs accessory | 842 / 509 |
 | Parameter rows | 2,039 (1,050 with a unit, 841 with a number) |
+| Product profile cards | **38** across **13** robots (`delivery` 8 · `cleaning` 4 · `industrial_delivery` 1; 13 EN · 13 DE · 12 IT) |
 | Chunk size (chars) | min 5 · mean 702 · max 2,832 (tables kept whole) |
 | Cleaned markdown | ~1.0 MB → 1.6 MB of JSONL |
 
@@ -123,7 +125,8 @@ needs them (the chunker), then disappear from the chunk text.
 * every figure chunk points at an image file that exists;
 * unique chunk ids, prose within the chunk budget;
 * every `en.md` / `de.md` / `it.md` in `data/` produced chunks;
-* every parameter row links back to a source chunk.
+* every parameter row links back to a source chunk;
+* every `(robot, language)` pair has a valid product profile card with category, `key_use_case`, citation, and valid `chunk_ids`.
 
 Current status: **0 errors, 1 warning** (the 3 chunks whose page markers only name the PDF page).
 

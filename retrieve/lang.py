@@ -42,28 +42,34 @@ _WORD_CUES = {
         "wie", "was", "welche", "welcher", "welches", "warum", "wann", "wo",
         "kann", "muss", "soll", "darf", "ist", "sind", "der", "die", "das",
         "und", "nicht", "mit", "für", "von", "bei", "über", "unter", "auch",
-        # domain words (short technician queries)
+        # domain words (short technician & visual queries)
         "gewicht", "akku", "akkukapazität", "batterie", "spannung", "ladestation",
         "reinigung", "reinigen", "schmutzwassertank", "geschwindigkeit",
         "abmessungen", "zuladung", "ladegerät", "einschalten", "ausschalten",
         "temperatur", "feuchtigkeit", "garantie", "notausschalter",
+        "bild", "bilder", "abbildung", "zeig", "zeigen", "sieht", "vom", "ein",
+        "vergleich", "vergleiche", "aufzug",
     },
     "it": {
         "quale", "quali", "quanto", "quanti", "come", "dove", "quando",
         "perché", "perche", "cosa", "posso", "deve", "sono", "che", "non",
         "per", "con", "del", "della", "delle", "degli", "una", "uno", "anche",
-        # domain words (short technician queries)
+        # domain words (short technician & visual queries)
         "peso", "batteria", "tensione", "ricarica", "pulizia", "pulire",
         "serbatoio", "velocità", "dimensioni", "carico", "alimentatore",
         "accensione", "spegnimento", "temperatura", "umidità", "garanzia",
+        "mostrami", "mostra", "figura", "immagine", "aspetto", "ristorante",
+        "supermercato", "albergo", "confronta", "confronto", "ascensore",
     },
     "en": {
         "what", "which", "how", "why", "when", "where", "does", "do", "can",
         "should", "is", "are", "the", "and", "not", "with", "for", "from",
         "about", "much", "many",
-        # domain words that make a one-word question unambiguous
+        # domain words that make a one-word or short visual question unambiguous
         "weight", "battery", "voltage", "charging", "cleaning", "tank", "speed",
         "dimensions", "payload", "charger", "power", "humidity", "warranty",
+        "picture", "pictures", "photo", "image", "diagram", "figure", "show",
+        "look", "looks", "fits", "restaurant", "supermarket", "compare", "elevator",
     },
 }
 

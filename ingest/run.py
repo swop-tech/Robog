@@ -16,6 +16,9 @@ It also writes, next to the chunks:
 * ``build/params.jsonl`` -- the structured parameter index (one row per table
   row: product -> parameter -> value/unit -> source page), see
   ``ingest/params.py`` and gap G1 in docs/pipeline-review.md.
+* ``build/profiles.jsonl`` -- deterministic product profile cards per robot
+  (category, dimensions, weight, payload, battery/runtime, speed, key use-case,
+  representative figure, source citations), see ``ingest/profiles.py`` and gap G2.
 * ``build/data-report.md`` -- the validation report (``ingest/validate.py``);
   the command exits non-zero if an error is found.
 
@@ -34,7 +37,8 @@ from pathlib import Path
 from .chunk import DEFAULT_MAX_CHARS, chunk_manual
 from .clean import load_manual
 from .params import build_param_index
-from .validate import load_jsonl, render_markdown, validate_chunks, validate_params
+from .profiles import build_product_profiles
+from .validate import load_jsonl, render_markdown, validate_chunks, validate_params, validate_profiles
 
 MANUAL_LANG_FILES = {"en.md", "de.md", "it.md"}
 
@@ -52,6 +56,8 @@ def main() -> None:
                         help="output JSONL file (default: build/chunks.jsonl)")
     parser.add_argument("--params", default=None, type=Path,
                         help="parameter index output (default: <out dir>/params.jsonl)")
+    parser.add_argument("--profiles", default=None, type=Path,
+                        help="product profile cards output (default: <out dir>/profiles.jsonl)")
     parser.add_argument("--report", default=None, type=Path,
                         help="validation report (default: <out dir>/data-report.md)")
     parser.add_argument("--max-chars", default=DEFAULT_MAX_CHARS, type=int,
@@ -61,6 +67,7 @@ def main() -> None:
     args = parser.parse_args()
 
     args.params = args.params or args.out.parent / "params.jsonl"
+    args.profiles = args.profiles or args.out.parent / "profiles.jsonl"
     args.report = args.report or args.out.parent / "data-report.md"
 
     files = discover_manuals(args.data)
@@ -102,11 +109,20 @@ def main() -> None:
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
     print(f"  parameter index: {len(params)} rows -> {args.params}")
 
+    # -- deterministic product profile cards (gap G2) -----------------------
+    profiles = build_product_profiles(chunks, params)
+    with args.profiles.open("w", encoding="utf-8") as out:
+        for card in profiles:
+            out.write(json.dumps(card, ensure_ascii=False) + "\n")
+    unique_robots = len({card["product"] for card in profiles})
+    print(f"  product profiles: {len(profiles)} cards ({unique_robots} robots) -> {args.profiles}")
+
     # -- validation gate -----------------------------------------------------
     if args.no_validate:
         return
     report = validate_chunks(chunks, args.data)
     validate_params(params, report)
+    validate_profiles(profiles, chunks, report)
     args.report.write_text(render_markdown(report, str(args.out)), encoding="utf-8")
     print(f"  validation: {len(report.errors)} error(s), {len(report.warnings)} warning(s) "
           f"-> {args.report}")

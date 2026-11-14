@@ -30,7 +30,8 @@ from ingest.params import (
     parse_table_rows,
     split_merged_cell,
 )
-from ingest.validate import validate_chunks, validate_params
+from ingest.profiles import appearance_figure_score, build_product_profiles
+from ingest.validate import validate_chunks, validate_params, validate_profiles
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sample_manual"
 DATA = Path(__file__).parent.parent / "data"
@@ -342,6 +343,80 @@ class ValidateTests(unittest.TestCase):
         self.assertEqual(report.info["param_rows"], len(params))
 
 
+class ProfileBuildTests(unittest.TestCase):
+    def setUp(self):
+        self.chunks = [c.to_json() for c in chunk_manual(load_manual(FIXTURES / "en.md"))]
+        for c in self.chunks:
+            c["metadata"]["doc_type"] = "robot"
+        self.params = build_param_index(self.chunks)
+        for p in self.params:
+            p["doc_type"] = "robot"
+
+    def test_build_product_profiles_from_fixture(self):
+        profiles = build_product_profiles(self.chunks, self.params)
+        self.assertEqual(len(profiles), 1)
+        card = profiles[0]
+        self.assertEqual(card["product"], "FlashBot")
+        self.assertEqual(card["language"], "en")
+        self.assertEqual(card["category"], "delivery")
+        self.assertIn("30 kg", card["payload"] or "")
+        self.assertTrue(card["key_use_case"])
+        self.assertTrue(card["chunk_ids"])
+        report = validate_profiles(profiles, self.chunks)
+        self.assertEqual(report.errors, [])
+
+    def test_accessories_are_excluded_from_robot_profiles(self):
+        for c in self.chunks:
+            c["metadata"]["doc_type"] = "accessory"
+        self.assertEqual(build_product_profiles(self.chunks, self.params), [])
+
+    def test_appearance_figure_score_prefers_overview_diagram(self):
+        overview_fig = {
+            "text": "The figure shows the front, back, and top views of the robot.\nLabels: 1 Lidar; 2 Tray; 3 Emergency stop switch; 4 Power switch",
+            "metadata": {
+                "chunk_type": "figure",
+                "image": "images/en-overview.png",
+                "section": "2.2 Appearance & components",
+                "section_title": "Appearance & components",
+                "section_number": "2.2",
+                "page": 3,
+            },
+        }
+        warning_fig = {
+            "text": "Warning icon near battery.",
+            "metadata": {
+                "chunk_type": "figure",
+                "image": "images/en-warn.png",
+                "section": "1.1 Safety instructions",
+                "section_title": "Safety instructions",
+                "section_number": "1.1",
+                "page": 1,
+            },
+        }
+        maint_fig = {
+            "text": "Hand removing filter.",
+            "metadata": {
+                "chunk_type": "figure",
+                "image": "images/en-maint.png",
+                "section": "6.2 Maintenance",
+                "section_title": "Maintenance",
+                "section_number": "6.2",
+                "page": 14,
+            },
+        }
+        self.assertGreater(appearance_figure_score(overview_fig), appearance_figure_score(warning_fig))
+        self.assertGreater(appearance_figure_score(overview_fig), appearance_figure_score(maint_fig))
+
+    def test_validate_profiles_catches_invalid_card(self):
+        profiles = build_product_profiles(self.chunks, self.params)
+        bad = dict(profiles[0])
+        bad["chunk_ids"] = ["nonexistent-chunk-id"]
+        bad["category"] = "spaceship"
+        bad["key_use_case"] = ""
+        report = validate_profiles([profiles[0], bad], self.chunks)
+        self.assertGreaterEqual(len(report.errors), 3)
+
+
 @unittest.skipUnless((DATA / "manuals").exists(), "dataset not present")
 class RealDatasetTests(unittest.TestCase):
     """Smoke test on the real manuals: the pipeline must stay clean."""
@@ -368,6 +443,30 @@ class RealDatasetTests(unittest.TestCase):
 
     def test_validation_passes_on_real_data(self):
         report = validate_chunks([c.to_json() for c in self.chunks])
+        self.assertEqual(report.errors, [])
+
+    def test_all_13_robots_produce_valid_profiles(self):
+        from ingest.run import discover_manuals
+
+        all_chunks = [
+            c.to_json()
+            for md in discover_manuals(DATA)
+            for c in chunk_manual(load_manual(md))
+        ]
+        all_params = build_param_index(all_chunks)
+        profiles = build_product_profiles(all_chunks, all_params)
+        self.assertEqual(len(profiles), 38)
+        self.assertEqual(len({p["product"] for p in profiles}), 13)
+        en_cats = {p["product"]: p["category"] for p in profiles if p["language"] == "en"}
+        self.assertEqual(sum(1 for c in en_cats.values() if c == "delivery"), 8)
+        self.assertEqual(sum(1 for c in en_cats.values() if c == "cleaning"), 4)
+        self.assertEqual(sum(1 for c in en_cats.values() if c == "industrial_delivery"), 1)
+        for card in profiles:
+            self.assertTrue(card["dimensions"], f"missing dimensions on {card['id']}")
+            self.assertTrue(card["battery_runtime"], f"missing battery/runtime on {card['id']}")
+            self.assertTrue(card["key_use_case"], f"missing key_use_case on {card['id']}")
+            self.assertTrue(card["image"], f"missing image on {card['id']}")
+        report = validate_profiles(profiles, all_chunks)
         self.assertEqual(report.errors, [])
 
 

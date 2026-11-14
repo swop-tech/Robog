@@ -213,6 +213,65 @@ def validate_params(params: list[dict], report: Report | None = None) -> Report:
     return report
 
 
+VALID_PROFILE_CATEGORIES = ("delivery", "industrial_delivery", "cleaning", "accessory")
+
+
+def validate_profiles(
+    profiles: list[dict],
+    chunks: list[dict] | None = None,
+    report: Report | None = None,
+) -> Report:
+    report = report or Report()
+    if not profiles:
+        report.warn("no product profile cards (build/profiles.jsonl missing or empty)")
+        return report
+
+    unique_products = sorted({p.get("product", "") for p in profiles if p.get("product")})
+    by_category = Counter(
+        p.get("category", "?")
+        for p in {card.get("product"): card for card in profiles}.values()
+    )
+    report.info["profile_cards"] = len(profiles)
+    report.info["profile_products"] = len(unique_products)
+    report.info["profiles_by_category"] = dict(by_category)
+
+    bad_category = [
+        p.get("id", "?") for p in profiles if p.get("category") not in VALID_PROFILE_CATEGORIES
+    ]
+    if bad_category:
+        report.error(f"{len(bad_category)} profile card(s) with invalid category: {bad_category[:5]}")
+
+    missing_use_case = [p.get("id", "?") for p in profiles if not str(p.get("key_use_case") or "").strip()]
+    if missing_use_case:
+        report.error(f"{len(missing_use_case)} profile card(s) without key_use_case: {missing_use_case[:5]}")
+
+    missing_citation = [p.get("id", "?") for p in profiles if not str(p.get("citation") or "").strip()]
+    if missing_citation:
+        report.error(f"{len(missing_citation)} profile card(s) without citation: {missing_citation[:5]}")
+
+    if chunks is not None:
+        chunk_ids = {c["id"] for c in chunks}
+        dangling = [
+            p.get("id", "?")
+            for p in profiles
+            if not p.get("chunk_ids") or any(cid not in chunk_ids for cid in p.get("chunk_ids", ()))
+        ]
+        if dangling:
+            report.error(f"{len(dangling)} profile card(s) with missing/unknown chunk_ids: {dangling[:5]}")
+
+        expected_pairs = {
+            (c["metadata"].get("product"), c["metadata"].get("language"))
+            for c in chunks
+            if c.get("metadata", {}).get("doc_type") == "robot"
+        }
+        seen_pairs = {(p.get("product"), p.get("language")) for p in profiles}
+        missing_pairs = sorted(f"{prod}/{lang}" for prod, lang in (expected_pairs - seen_pairs))
+        if missing_pairs:
+            report.error(f"{len(missing_pairs)} robot/language pair(s) missing a profile card: {missing_pairs[:5]}")
+
+    return report
+
+
 def _fmt_counts(counts: dict, order=()) -> str:
     """Render a Counter dict in a stable, readable order."""
     keys = [k for k in order if k in counts] + sorted(k for k in counts if k not in order)
@@ -240,6 +299,7 @@ def render_markdown(report: Report, chunks_path: str = "build/chunks.jsonl") -> 
         f"| Robot vs accessory chunks | {_fmt_counts(info.get('by_doc_type', {}), ('robot', 'accessory', 'unknown'))} |",
         f"| Character length (min / mean / max) | {info.get('chars_min')} / {info.get('chars_mean')} / {info.get('chars_max')} |",
         f"| Parameter rows | {info.get('param_rows', 0):,} ({info.get('param_rows_with_unit', 0):,} with a unit, {info.get('param_rows_with_number', 0):,} with a number) |",
+        f"| Product profile cards | {info.get('profile_cards', 0):,} ({info.get('profile_products', 0)} robots: {_fmt_counts(info.get('profiles_by_category', {}), ('delivery', 'cleaning', 'industrial_delivery'))}) |",
         "",
         "## Figures",
         "",
@@ -275,6 +335,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validate the data-processing output.")
     parser.add_argument("--chunks", default=Path("build/chunks.jsonl"), type=Path)
     parser.add_argument("--params", default=Path("build/params.jsonl"), type=Path)
+    parser.add_argument("--profiles", default=Path("build/profiles.jsonl"), type=Path)
     parser.add_argument("--data", default=Path("data"), type=Path)
     parser.add_argument("--report", default=Path("build/data-report.md"), type=Path)
     args = parser.parse_args()
@@ -282,6 +343,8 @@ def main() -> None:
     chunks = load_jsonl(args.chunks)
     report = validate_chunks(chunks, args.data)
     validate_params(load_jsonl(args.params), report)
+    if args.profiles.exists():
+        validate_profiles(load_jsonl(args.profiles), chunks, report)
 
     markdown = render_markdown(report, str(args.chunks))
     args.report.parent.mkdir(parents=True, exist_ok=True)
