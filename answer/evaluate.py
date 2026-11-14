@@ -287,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=None, help="write a markdown report to this path")
     parser.add_argument("--json", action="store_true", help="print machine-readable results")
     parser.add_argument("--verbose", action="store_true", help="print every answer")
+    parser.add_argument(
+        "--vector", action="store_true",
+        help="answer through the hybrid (dense build/chroma + keyword) instead of keyword only, "
+             "so the embedding layer can be measured on answers and not just on retrieval",
+    )
     args = parser.parse_args(argv)
 
     path = Path(args.questions)
@@ -296,7 +301,11 @@ def main(argv: list[str] | None = None) -> int:
     with path.open(encoding="utf-8") as fh:
         questions = [json.loads(line) for line in fh if line.strip()]
 
-    engine = SearchEngine.from_build()
+    engine = SearchEngine.from_build(vector="auto" if args.vector else None)
+    if args.vector and engine.retriever_note:
+        # Without this the run silently measures the keyword floor and reports it
+        # as the hybrid: the whole point of --vector is to see the dense layer.
+        print(f"Note: {engine.retriever_note}")
     composer = AnswerComposer(engine, provider=args.provider, k=args.k)
     report = evaluate(composer, questions)
 
@@ -304,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(
             {
                 "provider": report.provider,
+                "retrieval": (
+                    "hybrid" if engine.retriever is not None else "keyword-only"
+                ),
                 "metrics": {
                     "answered": report.answer_rate,
                     "grounded": report.grounded_rate,
@@ -326,7 +338,15 @@ def main(argv: list[str] | None = None) -> int:
         ))
         return 0 if report.grounded_rate == 1.0 else 1
 
-    print(f"\nAnswer composer evaluation ({report.provider}, {report.n} questions)")
+    retrieval_mode = (
+        f"hybrid (dense {getattr(engine.retriever, 'provider', 'vector')} + keyword)"
+        if engine.retriever is not None
+        else "keyword only"
+    )
+    print(
+        f"\nAnswer composer evaluation ({report.provider}, {report.n} questions, "
+        f"retrieval: {retrieval_mode})"
+    )
     print(f"  answered ....................... {_pct(report.answer_rate)}")
     print(f"  grounded (validation passed) ... {_pct(report.grounded_rate)}")
     print(f"  fully verified (no repairs) .... {_pct(report.verified_rate)}")

@@ -49,7 +49,7 @@ answer/ composer + evidence validator ──► api/ FastAPI (/search /ask /prod
 
 ```bash
 wc -l build/chunks.jsonl                                   # 1351 — real data, not a slide gimmick
-python -m unittest discover -q                             # 274 tests, on screen
+python -m unittest discover -q                             # 295 tests, on screen
 python -m retrieve.evaluate                                # the benchmark table, live
 python -m retrieve "Wieviel Zuladung hat der FlashBot?"    # German → 20 kg, §2.3, p. 40, DE
 python -m retrieve "Quanto pesa la stazione di ricarica CC1?"    # IT question, no IT manual → says so, answers from EN/DE

@@ -82,16 +82,26 @@ _ADVISORY_CUES = {
         "suggest", "compare", "comparison", "difference between", "vs", "versus",
         "should i choose", "what should i buy", "fits my", "fits a", "suitable",
         "ideal for", "right robot",
+        # plural / verb forms of the same intent -- a cue list that only carries
+        # the singular silently routes "what are the differences between A and B"
+        # to `default`, where BM25 has nothing left to score (see engine.search's
+        # product-mention comparison rule for the second half of the fix).
+        "differences between", "differences of", "how do they differ",
+        "what is better", "which is better", "which one is better",
     ),
     "de": (
         "welcher roboter", "welches modell", "welche roboter", "empfehl",
         "empfiehl", "vergleich", "unterschied zwischen", "eignet sich",
         "passt zu", "passend fur", "sollte ich", "welches gerat", "besser fur",
+        "unterschiede zwischen", "unterschiede von", "was ist besser",
+        "welcher ist besser", "unterscheidet sich",
     ),
     "it": (
         "quale robot", "quale modello", "consigli", "consiglio", "confronto",
         "differenza tra", "differenze tra", "adatto", "adatta", "meglio per",
         "quale scegliere", "conviene", "ideale per",
+        "differenza fra", "differenze fra", "quali sono le differenze",
+        "qual e la differenza", "che differenza", "differenze principali",
     ),
 }
 

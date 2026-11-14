@@ -230,6 +230,8 @@ body {
 .verify-badge--good { background: var(--good-soft); color: var(--good); border-color: #bfe6cb; }
 .verify-badge--warn { background: var(--warn-soft); color: var(--warn); border-color: #f3d9a8; }
 .verify-badge--bad { background: var(--bad-soft); color: var(--bad); border-color: #f3c0c0; }
+/* No evidence -> the checks certified nothing: neutral, never green. */
+.verify-badge--none { background: var(--surface-3); color: var(--muted); border-color: var(--border-strong); }
 .verify-details {
   margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-2); padding: 14px; font-size: .85rem;

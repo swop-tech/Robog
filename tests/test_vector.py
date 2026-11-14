@@ -29,6 +29,7 @@ from retrieve.vector import (
     ChromaRetriever,
     DenseHit,
     VectorStoreUnavailable,
+    corpus_fingerprint,
 )
 
 
@@ -172,6 +173,22 @@ class FailingRetriever:
         raise VectorStoreUnavailable("boom")
 
 
+class ScriptedRetriever:
+    """Returns exactly the dense list it was given, in that order."""
+
+    provider = "fake"
+
+    def __init__(self, hits):
+        self._hits = hits
+
+    def search(self, query, k, *, allowed_ids=None):
+        return list(self._hits[:k])
+
+
+def _dense(row: dict, score: float) -> DenseHit:
+    return DenseHit(chunk_id=row["id"], score=score, text=row["text"], metadata=row["metadata"])
+
+
 class EngineFusionTests(unittest.TestCase):
     def setUp(self):
         self.chunks = [_chunk(row) for row in ROWS]
@@ -210,6 +227,50 @@ class EngineFusionTests(unittest.TestCase):
         by_id = {hit.chunk_id: hit for hit in hits}
         self.assertIn("de-payload", by_id)
         self.assertEqual(by_id["de-payload"].sources, ["vector"])
+
+    def test_figure_descriptions_are_demoted_in_the_dense_list(self):
+        figure = _row("fig-1", "The figure shows the disc brush and the arrows", "en")
+        figure["metadata"]["chunk_type"] = "figure"
+        text = _row("txt-1", "Remove the disc brush after each use and check for tangles", "en")
+        dense = [_dense(figure, 0.91), _dense(text, 0.88)]
+
+        demoted = SearchEngine._demote_figure_hits(dense)
+        self.assertEqual([hit.chunk_id for hit in demoted], ["txt-1", "fig-1"])
+        self.assertEqual(
+            [hit.chunk_id for hit in SearchEngine._demote_figure_hits([_dense(text, 0.5)])],
+            ["txt-1"],
+            "no figures -> untouched",
+        )
+
+    def test_search_demotes_figure_hits_before_fusing_them(self):
+        # The dense list is what RRF ranks on, so the contract is about the order
+        # handed to the fusion: figures last on a non-visual question, untouched
+        # on a visual one. (Which chunk finally wins also depends on BM25, so
+        # asserting the fused order here would test the tie-break, not this.)
+        figure = _row("fig-1", "The figure shows the disc brush and the arrows", "en")
+        figure["metadata"]["chunk_type"] = "figure"
+        text = _row("txt-1", "Clean the disc brush after each use and remove it", "en")
+        chunks = [_chunk(figure), _chunk(text)]
+        engine = SearchEngine(
+            chunks, ParamIndex([]),
+            retriever=ScriptedRetriever([_dense(figure, 0.95), _dense(text, 0.60)]),
+        )
+
+        fused: list[list[str]] = []
+        original = engine._rank_tier
+
+        def spy(tokens, expansion, **kwargs):
+            fused.append([hit.chunk_id for hit in (kwargs.get("dense") or [])])
+            return original(tokens, expansion, **kwargs)
+
+        engine._rank_tier = spy
+        engine.search("how do I clean the disc brush", k=2, language="en")
+        self.assertEqual(fused[-1], ["txt-1", "fig-1"])
+
+        visual = engine.search("show me a picture of the disc brush", k=2, language="en")
+        self.assertEqual(visual.route, "figure")
+        self.assertEqual(fused[-1], ["fig-1", "txt-1"])
+        self.assertIn("fig-1", [hit.chunk_id for hit in visual.hits])
 
     def test_from_build_auto_missing_store_keeps_keyword_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,6 +322,38 @@ class RealChromaIntegrationTests(unittest.TestCase):
             engine = SearchEngine(ROWS, ParamIndex([]), retriever=retriever)
             result = engine.search("payload kg", k=3, language="en")
             self.assertTrue(any("vector" in h.sources for h in result.hits))
+
+    def test_corpus_digest_roundtrip_and_stale_refusal_on_real_chroma(self):
+        try:
+            import chromadb  # noqa: F401
+        except ImportError:
+            self.skipTest("install chromadb to run the real-store integration test")
+        from unittest.mock import patch
+        from ingest.embed_index import GeminiEmbedder, index_chunks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks_file = Path(tmp) / "chunks.jsonl"
+            chunks_file.write_text(
+                "\n".join(json.dumps(r) for r in ROWS) + "\n", encoding="utf-8"
+            )
+            persist_dir = Path(tmp) / "chroma"
+            embedder = GeminiEmbedder(
+                dims=128, model_name="gemini-embedding-2", client=_StrictGenAIClient()
+            )
+            index_chunks(chunks_file, persist_dir, provider="gemini", dims=128, embedder=embedder)
+
+            ids = [row["id"] for row in ROWS]
+            with patch("retrieve.vector.make_embedder", return_value=(FakeEmbedder().embed, "gemini")):
+                retriever = ChromaRetriever.connect(persist_dir=persist_dir, corpus_ids=ids)
+                self.assertEqual(retriever.count, len(ROWS))
+
+                # The chunker changed and the corpus grew: the vectors on disk no
+                # longer belong to this corpus, so the store must be refused
+                # instead of silently citing chunks that no longer exist.
+                with self.assertRaises(VectorStoreUnavailable) as ctx:
+                    ChromaRetriever.connect(persist_dir=persist_dir, corpus_ids=ids + ["new-chunk"])
+            self.assertIn("stale", str(ctx.exception))
+            self.assertIn("--reset", str(ctx.exception))
 
     def test_index_chunks_roundtrip_and_dimension_switch_on_real_chroma(self):
         try:
@@ -477,6 +570,9 @@ class IndexAndCollectionMetadataTests(unittest.TestCase):
             def count(self) -> int:
                 return sum(len(b["ids"]) for b in self.upserted)
 
+            def modify(self, metadata=None):
+                self.metadata = dict(metadata or {})
+
             def upsert(self, *, ids, documents, metadatas, embeddings):
                 self.upserted.append(
                     {"ids": ids, "documents": documents, "metadatas": metadatas, "embeddings": embeddings}
@@ -565,6 +661,103 @@ class IndexAndCollectionMetadataTests(unittest.TestCase):
                 self.assertIn("provider='gemini'", str(ctx.exception))
 
 
+class CorpusFingerprintTests(unittest.TestCase):
+    """A vector index must belong to the corpus it is queried against."""
+
+    def test_fingerprint_is_order_insensitive_and_content_sensitive(self):
+        self.assertEqual(corpus_fingerprint(["a", "b", "c"]), corpus_fingerprint(["c", "a", "b"]))
+        self.assertNotEqual(corpus_fingerprint(["a", "b"]), corpus_fingerprint(["a", "b", "c"]))
+        self.assertEqual(len(corpus_fingerprint([])), 16)
+
+    def test_index_chunks_stamps_the_corpus_it_embedded(self):
+        from ingest.embed_index import GeminiEmbedder, index_chunks
+
+        class _Coll:
+            def __init__(self, name, metadata):
+                self.name, self.metadata, self.upserted = name, dict(metadata), []
+
+            def count(self):
+                return sum(len(b["ids"]) for b in self.upserted)
+
+            def upsert(self, *, ids, documents, metadatas, embeddings):
+                self.upserted.append({"ids": ids, "documents": documents})
+
+            def modify(self, metadata=None):
+                self.metadata.update(metadata or {})
+
+        class _Client:
+            def __init__(self):
+                self.collections = {}
+
+            def get_collection(self, name):
+                if name not in self.collections:
+                    raise ValueError("missing")
+                return self.collections[name]
+
+            def get_or_create_collection(self, name, metadata):
+                return self.collections.setdefault(name, _Coll(name, metadata))
+
+        client = _Client()
+        with tempfile.TemporaryDirectory() as tmp:
+            chunks_file = Path(tmp) / "chunks.jsonl"
+            chunks_file.write_text(json.dumps(_chunk(ROWS[0])) + "\n", encoding="utf-8")
+            embedder = GeminiEmbedder(
+                dims=128, model_name="gemini-embedding-2", client=_StrictGenAIClient()
+            )
+            index_chunks(
+                chunks_file, Path(tmp) / "chroma", provider="gemini", dims=128,
+                embedder=embedder, chroma_client=client,
+            )
+        meta = client.collections["robog"].metadata
+        self.assertEqual(meta["corpus_chunks"], 1)
+        self.assertEqual(meta["corpus_digest"], corpus_fingerprint([ROWS[0]["id"]]))
+        self.assertEqual(meta["provider"], "gemini", "the stamp must not drop existing keys")
+
+    def _stored(self, metadata):
+        class _StoredCollection:
+            def count(self):
+                return 3
+
+        _StoredCollection.metadata = metadata
+
+        class _StoredClient:
+            def get_collection(self, name):
+                return _StoredCollection()
+
+        return _StoredClient()
+
+    def _connect(self, client, **kwargs):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("retrieve.vector.load_dotenv", return_value=None), \
+                 patch("retrieve.vector._load_client", return_value=client), \
+                 patch("retrieve.vector.make_embedder", return_value=(FakeEmbedder().embed, "gemini")):
+                return ChromaRetriever.connect(persist_dir=tmp, **kwargs)
+
+    def test_connect_refuses_an_index_embedded_from_a_different_corpus(self):
+        client = self._stored({
+            "provider": "gemini", "model": "gemini-embedding-2", "dims": 768,
+            "corpus_digest": "deadbeefdeadbeef", "corpus_chunks": 900,
+        })
+        with self.assertRaises(VectorStoreUnavailable) as ctx:
+            self._connect(client, corpus_ids=["a", "b", "c"])
+        message = str(ctx.exception)
+        self.assertIn("stale", message)
+        self.assertIn("--reset", message, "the error must say how to fix it")
+
+    def test_connect_accepts_a_matching_digest_and_a_legacy_index(self):
+        digest = corpus_fingerprint(["a", "b"])
+        fresh = self._stored({
+            "provider": "gemini", "model": "gemini-embedding-2", "dims": 768,
+            "corpus_digest": digest, "corpus_chunks": 2,
+        })
+        self.assertEqual(self._connect(fresh, corpus_ids=["b", "a"]).count, 3)
+
+        legacy = self._stored({"provider": "gemini", "dims": 768})  # pre-digest index
+        self.assertEqual(self._connect(legacy, corpus_ids=["b", "a"]).count, 3)
+
+
 class RateLimitAndResumeTests(unittest.TestCase):
     def test_token_rate_limiter_paces_sliding_minute_window(self):
         from ingest.embed_index import TokenRateLimiter
@@ -624,6 +817,9 @@ class RateLimitAndResumeTests(unittest.TestCase):
 
             def count(self) -> int:
                 return len(self.rows)
+
+            def modify(self, metadata=None):
+                self.metadata = dict(metadata or {})
 
             def get(self, include=None):
                 return {"ids": list(self.rows.keys())}

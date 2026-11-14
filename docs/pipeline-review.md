@@ -184,7 +184,7 @@ Checked against the repo at this commit (`ingest/`, `retrieve/`, `eval/`, `docs/
 | Dense retrieval (G3/G1 full) | ⚠️ code only | `ingest/embed_index.py` exists; never run/validated end-to-end |
 | Product profile cards (G2 advisory) | ✅ done | `ingest/profiles.py` → `build/profiles.jsonl` (38 cards across 13 robots) + `retrieve/profiles.py` (`ProfileIndex`, `SearchResult.profiles`) |
 | Picture intent & language-aware figure selection (G6 retrieval) | ✅ done | `route="figure"` in EN/DE/IT, overview diagram ranker, `Hit.labels`, EN-first cross-lingual fallback |
-| Backend API (G4 → Bonus 01) | ✅ done | `api/` — FastAPI `GET /search` (`to_dict()` unchanged + `image_url`), `POST /ask`, `GET /products`, `GET /health`, `/docs`; 57 tests + a stdlib second client → [`api.md`](api.md) |
+| Backend API (G4 → Bonus 01) | ✅ done | `api/` — FastAPI `GET /search` (`to_dict()` unchanged + `image_url`), `POST /ask`, `GET /products`, `GET /health`, `/docs`; 63 tests + a stdlib second client → [`api.md`](api.md) |
 | Answer composer + evidence validation (G5) | ✅ done | `answer/` — `gemini-2.5-flash` + offline formatter, three post-checks (citation/numeric/quote) with repair; 28-question answer benchmark: 100% grounded, 0 invented numbers, 100% answer-language match, 100% cross-lingual disclosure → [`answering.md`](answering.md) |
 | Multilingual answers (Bonus 02, answering half) | ✅ done | answer language = question language, evidence languages disclosed, values quoted from EN/DE sources for Italian questions → [`answering.md`](answering.md) |
 | HTTP media serving (G6 display) | ✅ done | `GET /media/{doc_id}/{filename}` serves all 476 PNGs, path-traversal safe + cached; hits/citations/figures carry `image_url` |

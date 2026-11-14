@@ -45,6 +45,7 @@ Design rules, on purpose:
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -110,6 +111,23 @@ def l2_normalize(vector: list[float]) -> list[float]:
     if norm <= 0.0:
         return [float(v) for v in vector]
     return [float(v) / norm for v in vector]
+
+
+def corpus_fingerprint(chunk_ids) -> str:
+    """Stable digest of the chunk ids a vector index was built from.
+
+    A Chroma collection outlives the ``build/chunks.jsonl`` it was embedded
+    from: re-run ingest with a changed chunker and the store still answers with
+    vectors -- and text -- for chunks that no longer exist. The engine serves
+    such a dense-only hit from the vector store (``_chunk_view``), so a stale
+    index can put words in an answer that are in no current manual. Digest the
+    ids (order-insensitive) so ``connect`` can refuse it loudly instead.
+    """
+    digest = hashlib.sha256()
+    for chunk_id in sorted(str(cid) for cid in chunk_ids):
+        digest.update(chunk_id.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()[:16]
 
 
 def resolve_gemini_api_key() -> str | None:
@@ -353,13 +371,18 @@ class ChromaRetriever:
                 provider: str | None = None,
                 dims: int | None = None,
                 *,
-                model: str | None = None) -> "ChromaRetriever":
+                model: str | None = None,
+                corpus_ids=None) -> "ChromaRetriever":
         """Open the existing store. Never creates anything.
 
         Auto-detects ``provider``, ``model`` and ``dims`` recorded in the
         Chroma collection metadata by ``ingest.embed_index`` when not
         explicitly overridden, and rejects accidental provider mismatches
         (e.g. querying a 1536-dim Gemini index with a 384-dim local model).
+
+        ``corpus_ids`` are the chunk ids of the corpus currently loaded; when
+        the collection records a different ``corpus_digest`` the index is stale
+        and is refused (keyword retrieval carries on, and says why).
         """
         load_dotenv()
         path = Path(persist_dir or os.environ.get(ENV_PATH, DEFAULT_CHROMA_PATH))
@@ -390,6 +413,20 @@ class ChromaRetriever:
             )
 
         stored_meta = getattr(collection, "metadata", None) or {}
+
+        stored_digest = str(stored_meta.get("corpus_digest") or "").strip()
+        if stored_digest and corpus_ids is not None:
+            current_ids = list(corpus_ids)
+            current_digest = corpus_fingerprint(current_ids)
+            if current_digest != stored_digest:
+                provider_hint = stored_meta.get("provider") or "gemini"
+                raise VectorStoreUnavailable(
+                    f"collection '{name}' in '{path}' is stale: embedded from "
+                    f"{stored_meta.get('corpus_chunks', '?')} chunks (digest {stored_digest}), "
+                    f"the corpus now has {len(current_ids)} (digest {current_digest}) -- re-run "
+                    f"python -m ingest.embed_index --provider {provider_hint} --reset"
+                )
+
         stored_provider = str(stored_meta.get("provider") or "").strip().lower() or None
         explicit_provider = (provider or os.environ.get(ENV_PROVIDER) or "").strip().lower() or None
 

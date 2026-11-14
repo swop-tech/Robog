@@ -143,6 +143,17 @@ class ValidationReport:
         return self.ok and not self.warnings
 
     @property
+    def checks_run(self) -> bool:
+        """True when there was actually something to check.
+
+        An answer with no evidence passes every check vacuously (0/0 claims,
+        0/0 numbers), and ``verified`` is then True for a reply that says
+        "not in the manuals". Callers must not render that as a green pass --
+        a badge that certifies nothing is worse than no badge.
+        """
+        return bool(self.sentences_checked or self.numbers_checked or self.quotes_checked)
+
+    @property
     def citation_rate(self) -> float:
         if not self.sentences_checked:
             return 1.0
@@ -164,6 +175,8 @@ class ValidationReport:
         """One line for the UI ("all 4 claims cited, 6/6 numbers verified")."""
         from .strings import text
 
+        if not self.checks_run:
+            return text("validation_no_checks", language)
         return text(
             "validation_summary",
             language,
@@ -177,6 +190,7 @@ class ValidationReport:
         return {
             "ok": self.ok,
             "verified": self.verified,
+            "checks_run": self.checks_run,
             "sentences_checked": self.sentences_checked,
             "sentences_cited": self.sentences_cited,
             "citation_rate": round(self.citation_rate, 3),

@@ -145,6 +145,30 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "{cited}/{sentences} Aussagen belegt · {verified}/{numbers} Zahlen geprüft",
         "it": "{cited}/{sentences} affermazioni citate · {verified}/{numbers} numeri verificati",
     },
+    "validation_no_checks": {
+        "en": "Nothing to verify — no passage of the manuals answered this question.",
+        "de": "Nichts zu prüfen — keine Passage der Handbücher hat diese Frage beantwortet.",
+        "it": "Nulla da verificare — nessun passaggio dei manuali ha risposto alla domanda.",
+    },
+    "needs_robot_and_parameter": {
+        "en": (
+            "Which robot and which parameter do you mean? The manuals cover 13 robots and "
+            "9 accessories, so name one (for example FlashBot, BellaBot, SH1, T300) and the "
+            "value you need (payload, battery, speed, tank capacity, dimensions) and I will "
+            "quote it with its page."
+        ),
+        "de": (
+            "Welchen Roboter und welchen Parameter meinen Sie? Die Handbücher umfassen 13 "
+            "Roboter und 9 Zubehörteile. Nennen Sie eines (zum Beispiel FlashBot, BellaBot, "
+            "SH1, T300) und den gesuchten Wert (Zuladung, Akku, Geschwindigkeit, "
+            "Tankinhalt, Abmessungen), dann zitiere ich ihn mit Seite."
+        ),
+        "it": (
+            "Quale robot e quale parametro intendi? I manuali coprono 13 robot e 9 accessori: "
+            "indicane uno (ad esempio FlashBot, BellaBot, SH1, T300) e il valore che ti serve "
+            "(carico, batteria, velocità, capacità del serbatoio, dimensioni) e lo citerò con la pagina."
+        ),
+    },
     "provider_offline_note": {
         "en": "Answer composed by the offline formatter (no LLM call).",
         "de": "Antwort vom Offline-Formatierer erstellt (kein LLM-Aufruf).",

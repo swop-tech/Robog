@@ -153,6 +153,25 @@ class AnswerComposer:
         language = result.language or language or "en"
 
         notes: list[str] = []
+
+        # "What is the value of this parameter?" names neither a robot nor a
+        # parameter. The index holds 2,039 parameter rows, so whatever passage
+        # BM25 returns for the bare words "value"/"parameter" is a guess dressed
+        # as an answer -- and the technician persona in the brief is better
+        # served by the one thing that actually helps: ask which robot and which
+        # parameter. The gate runs on the retrieval result, before evidence
+        # selection, because junk passages are perfectly retrievable.
+        if result.route == "lookup" and not result.params and not result.products:
+            draft = Draft(
+                text=text("needs_robot_and_parameter", language),
+                provider="offline",
+                language=language,
+                notes=["under-specified lookup: no robot and no parameter named"],
+            )
+            empty = Evidence(language=language, notes=list(result.notes))
+            notes.append("asked back: question named neither a robot nor a parameter")
+            return self._finish(question, draft, empty, result, language, notes, started)
+
         if not evidence.refs:
             draft = format_answer(evidence, question=question, language=language, route=result.route)
             return self._finish(question, draft, evidence, result, language, notes, started)

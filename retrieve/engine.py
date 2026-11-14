@@ -315,7 +315,9 @@ class SearchEngine:
             if vector != "auto":
                 raise ValueError(f"vector must be None, 'auto' or a retriever, got {vector!r}")
             try:
-                engine.retriever = ChromaRetriever.connect()
+                engine.retriever = ChromaRetriever.connect(
+                    corpus_ids=[chunk.get("id") for chunk in chunks]
+                )
             except VectorStoreUnavailable as exc:
                 engine.retriever = None
                 engine.retriever_note = f"dense retrieval disabled: {exc}"
@@ -440,6 +442,23 @@ class SearchEngine:
             self.retriever = None
             self.retriever_note = f"dense retrieval disabled: unexpected {type(exc).__name__}: {exc}"
             return []
+
+    @staticmethod
+    def _demote_figure_hits(dense_hits: list[DenseHit]) -> list[DenseHit]:
+        """Figure chunks go last in the dense list unless a picture was asked for.
+
+        476 of the 1,351 chunks are AI-written figure *descriptions*: long,
+        generic prose ("the arrows show how to rotate the brush ...") that
+        cosine similarity happily matches to almost any symptom or procedure
+        question. They are context, not answers -- BM25 keeps them honest
+        because a description rarely contains the term that was asked for, so
+        the dense half has to be held to the same standard.
+        """
+        figures = [hit for hit in dense_hits if hit.metadata.get("chunk_type") == "figure"]
+        if not figures:
+            return dense_hits
+        rest = [hit for hit in dense_hits if hit.metadata.get("chunk_type") != "figure"]
+        return rest + figures
 
     def _lang_rank(self, lang: str, preference: list[str] | None) -> int:
         if not preference:
@@ -618,6 +637,90 @@ class SearchEngine:
             return True
         return False
 
+    def _product_fallback_hits(
+        self,
+        products: list[str],
+        tiers: list[str | None],
+        *,
+        k: int,
+        figure: bool = False,
+    ) -> list[Hit]:
+        """The named products' spec/overview chunks when the wording matched nothing.
+
+        Profile cards already know which chunk carries a product's specifications
+        and which carries its overview, so the fallback is a metadata lookup, not
+        another search: no scoring, no guessing, and every hit still cites a real
+        page. Accessories have no card -- for those take the first text chunks in
+        document order, skipping boilerplate.
+
+        ``tiers`` is the language policy's tier list, so the fallback never
+        reaches a language the caller ruled out: with ``cross_lingual_fallback``
+        off, an Italian FlashBot question must still find nothing, because there
+        is no Italian FlashBot manual (that is the whole point of the policy).
+        """
+        allowed_langs = [lang for lang in tiers if lang] or None  # None = any
+        wanted: list[str] = []
+
+        def _add(chunk_id: str | None) -> None:
+            if not chunk_id or chunk_id in wanted or chunk_id not in self.by_id:
+                return
+            if allowed_langs is not None:
+                lang = self.by_id[chunk_id].get("metadata", {}).get("language")
+                if lang not in allowed_langs:
+                    return
+            wanted.append(chunk_id)
+
+        chunk_type = "figure" if figure else "text"
+        card_keys = ("figure_chunk_id",) if figure else ("spec_chunk_id", "overview_chunk_id")
+
+        for prod in products:
+            cards = self.profiles.by_product.get(prod) or {}
+            langs = [lang for lang in (allowed_langs or list(cards)) if lang in cards]
+            record = cards[langs[0]] if langs else {}
+            before = len(wanted)
+            for key in card_keys:
+                _add(record.get(key))
+            if len(wanted) > before:
+                continue
+            candidates: list[str] = []
+            for lang in (allowed_langs or [None]):
+                allowed = self._allowed_ids(language=lang, products=[prod], chunk_type=chunk_type) or set()
+                candidates.extend(allowed)
+                if candidates and allowed_langs is not None:
+                    break  # same-language-first, exactly like the tier loop
+            if figure:
+                candidates.sort(
+                    key=lambda cid: (
+                        -appearance_figure_score(self.by_id[cid]),
+                        cid,
+                    )
+                )
+            else:
+                candidates.sort()
+            picked = 0
+            for chunk_id in candidates:
+                if picked >= 2:
+                    break
+                if not figure and self._is_advisory_noise_chunk(self.by_id[chunk_id].get("metadata", {})):
+                    continue
+                _add(chunk_id)
+                picked += 1
+
+        hits: list[Hit] = []
+        for chunk_id in wanted[: max(k, 2)]:
+            chunk = self.by_id[chunk_id]
+            hits.append(
+                Hit(
+                    chunk_id=chunk_id,
+                    text=chunk.get("text", ""),
+                    metadata=chunk.get("metadata", {}),
+                    score=0.0,
+                    rank=len(hits) + 1,
+                    sources=["product-fallback"],
+                )
+            )
+        return hits
+
     # -- search ------------------------------------------------------------
     def search(
         self,
@@ -643,6 +746,16 @@ class SearchEngine:
         )
         available = self.languages_for(products)
         routed: Route = classify(query, detected)
+
+        # Two product mentions are themselves the comparison signal: a cue list
+        # can never carry every plural/verb form ("what are the differences
+        # between A and B", "A und B im Vergleich"), and routing those to
+        # `default` leaves BM25 with nothing but framing words to score -- which
+        # used to return zero hits for two robots that are both in the corpus.
+        if routed.kind == "default" and product is None:
+            mentions = self._matched_product_groups(query)
+            if len({tuple(group) for group in mentions}) >= 2:
+                routed = Route("advisory", f"comparison: {len(mentions)} products named")
 
         if not tokens:
             return SearchResult(query, detected, routed.kind, routed.reason, "empty query")
@@ -717,6 +830,8 @@ class SearchEngine:
                 tiers_used.append(f"{tier or 'any'}:0")
                 continue
             dense_hits = self._dense_hits(query, allowed, k=max(k * 3, 12))
+            if dense_hits and not routed.is_figure:
+                dense_hits = self._demote_figure_hits(dense_hits)
 
             if routed.is_figure and not figure_topic_tokens:
                 tier_hits = self._rank_appearance_figures(
@@ -757,6 +872,21 @@ class SearchEngine:
             if top > best_top * 1.25:
                 hits, best_top = tier_hits, top
             break
+
+        # Nothing matched the question's wording, but the question did name
+        # products we have: answering "not in the manuals" there is the worst
+        # possible reply -- the corpus holds those products' specification,
+        # overview and profile sections. Fall back to them and say so.
+        if not hits and products:
+            hits = self._product_fallback_hits(
+                products, policy.tiers, k=max(k, 3), figure=routed.is_figure
+            )
+            if hits:
+                tiers_used.append("product-fallback")
+                notes.append(
+                    "no passage matched the question's wording -- showing the "
+                    "named product's specification and overview sections"
+                )
 
         if self.retriever_note:
             notes.append(self.retriever_note)

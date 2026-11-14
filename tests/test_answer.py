@@ -372,6 +372,23 @@ class ValidatorBehaviourTests(unittest.TestCase):
         self.assertEqual(report.answer, "Non ho trovato nulla.")
         self.assertTrue(report.ok)
 
+    def test_no_evidence_report_reports_checks_not_run(self):
+        # 0/0 claims passes every check vacuously: `verified` stays True for
+        # compatibility, but `checks_run` tells callers not to render a green
+        # badge for an answer that was never grounded in anything.
+        empty = Evidence(refs=[], language="en")
+        report = validate_answer("I could not find this in the manuals.", empty)
+        self.assertTrue(report.ok)
+        self.assertFalse(report.checks_run)
+        self.assertIn("checks_run", report.to_dict())
+        self.assertFalse(report.to_dict()["checks_run"])
+        self.assertIn("Nothing to verify", report.summary("en"))
+        self.assertIn("Nichts zu prüfen", report.summary("de"))
+
+    def test_checks_run_is_true_when_something_was_checked(self):
+        report = validate_answer("Load capacity is 20 kg [1].", make_evidence())
+        self.assertTrue(report.checks_run)
+
     def test_report_is_json_ready(self):
         import json
 
@@ -648,6 +665,28 @@ class CorpusAnswerTests(unittest.TestCase):
         self.assertEqual(answer.validation.numbers_verified, answer.validation.numbers_checked)
         self.assertTrue(any("p. 40" in c["citation"] or "p. 5" in c["citation"]
                             for c in answer.citations))
+
+    def test_under_specified_lookup_asks_for_the_robot_and_parameter(self):
+        # The brief's technician persona asks "What's the value of this
+        # parameter?": quoting whatever BM25 returns for the bare words
+        # "value"/"parameter" would be a guess dressed as an answer.
+        answer = self.composer.answer("What is the value of this parameter?")
+        self.assertEqual(answer.route, "lookup")
+        self.assertIn("Which robot and which parameter", answer.text)
+        self.assertEqual(answer.citations, [])
+        self.assertEqual(answer.figures, [])
+        self.assertFalse(answer.validation.checks_run)
+        self.assertTrue(any("asked back" in note for note in answer.notes), answer.notes)
+
+    def test_under_specified_lookup_asks_back_in_the_question_language(self):
+        answer = self.composer.answer("Qual è il valore di questo parametro?")
+        self.assertEqual(answer.language, "it")
+        self.assertIn("Quale robot e quale parametro", answer.text)
+
+    def test_a_lookup_that_names_its_parameter_still_answers(self):
+        answer = self.composer.answer("What is the value of the FlashBot load capacity?")
+        self.assertIn("20 kg", answer.text)
+        self.assertTrue(answer.validation.checks_run)
 
     def test_german_question_gets_a_german_answer(self):
         answer = self.composer.answer("Wieviel Zuladung hat der FlashBot?")
