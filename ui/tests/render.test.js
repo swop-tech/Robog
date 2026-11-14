@@ -20,6 +20,7 @@ import {
   drawerBodyHTML,
   errorCardHTML,
   fallbackNoteHTML,
+  latencyTitle,
   renderFigures,
   renderProfiles,
   renderSources,
@@ -426,6 +427,15 @@ describe("assistantCardHTML", () => {
     assert.ok(html.includes("Deutsch"), html);
     assert.ok(html.includes("offline formatter"), html);
     assert.ok(html.includes("143 ms"), html);
+  });
+
+  test("the latency tooltip says where the time went", () => {
+    const slow = { latency_ms: 4100, timings: { retrieval_ms: 12, generation_ms: 4060, llm_calls: 2 } };
+    assert.equal(latencyTitle(slow), "Time to answer · retrieval 12 ms · model 4060 ms in 2 calls");
+    assert.ok(latencyTitle({ timings: { retrieval_ms: 9, generation_ms: 0, llm_calls: 0 } }).includes("no model call"));
+    assert.equal(latencyTitle({ latency_ms: 5 }), "Time to answer");        // an older server
+    const html = assistantCardHTML({ ...message, payload: { ...message.payload, ...slow } }, { mediaUrl });
+    assert.ok(html.includes("model 4060 ms in 2 calls"), html);
   });
 
   test("the answer is rendered as markdown with a clickable citation", () => {

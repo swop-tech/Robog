@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +43,12 @@ from .params import ParamHit, ParamIndex
 from .profiles import ADVISORY_FRAMING_WORDS, ProfileHit, ProfileIndex, has_scenario_signal
 from .router import Route, route as classify
 from .text import fold, tokenize
-from .vector import ChromaRetriever, DenseHit, VectorStoreUnavailable
+from .vector import ChromaRetriever, DenseHit, VectorStoreBusy, VectorStoreUnavailable
+
+#: After a rate limit or a slow embedding call, answer from keywords for this
+#: long before asking the vector store again.
+DENSE_PAUSE_SECONDS = 60.0
+_PAUSED_NOTE = "dense retrieval paused"
 
 # Words every product name contains -- they say nothing about *which* product.
 GENERIC_PRODUCT_WORDS = {
@@ -254,6 +260,7 @@ class SearchEngine:
         # the same RRF fusion.
         self.retriever = retriever
         self.retriever_note: str | None = None
+        self._dense_paused_until = 0.0
         self.params_note: str | None = None
 
         # Section title is repeated into the indexed text (a small but real
@@ -436,8 +443,21 @@ class SearchEngine:
     ) -> list[DenseHit]:
         if self.retriever is None:
             return []
+        if time.monotonic() < self._dense_paused_until:
+            return []
         try:
-            return self.retriever.search(query, k=k, allowed_ids=allowed)
+            hits = self.retriever.search(query, k=k, allowed_ids=allowed)
+            if (self.retriever_note or "").startswith(_PAUSED_NOTE):
+                self.retriever_note = None           # the pause is over
+            return hits
+        except VectorStoreBusy as exc:
+            # Temporary (rate limit, slow call): keep the retriever, answer from
+            # keywords now, and try the vector store again after the pause.
+            self._dense_paused_until = time.monotonic() + DENSE_PAUSE_SECONDS
+            self.retriever_note = (
+                f"{_PAUSED_NOTE} for {DENSE_PAUSE_SECONDS:.0f} s (keyword search answers): {exc}"
+            )
+            return []
         except VectorStoreUnavailable as exc:
             self.retriever = None
             self.retriever_note = f"dense retrieval disabled: {exc}"

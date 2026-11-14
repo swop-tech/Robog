@@ -92,6 +92,21 @@ class VectorStoreUnavailable(RuntimeError):
     """The dense path cannot be used. The message says what to run to fix it."""
 
 
+class VectorStoreBusy(VectorStoreUnavailable):
+    """The dense path cannot be used *right now* (rate limit, slow response).
+
+    Raised while answering a question, where waiting for the quota window is
+    not an option: the engine carries on with keyword retrieval and tries the
+    dense path again a little later.
+    """
+
+
+#: While a user is waiting for an answer, a query embedding may take this long ...
+QUERY_EMBED_TIMEOUT = 8.0
+#: ... and is retried only if the wait before the retry is this short.
+QUERY_EMBED_MAX_WAIT = 2.0
+
+
 @dataclass
 class DenseHit:
     """One chunk returned by the vector store, with its score."""
@@ -164,6 +179,11 @@ def _is_quota_error(exc: Exception) -> bool:
     return any(marker in msg for marker in _QUOTA_MARKERS)
 
 
+def _is_timeout_error(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in msg for marker in ("timeout", "timed out", "deadline", "504"))
+
+
 def _is_retryable_error(exc: Exception) -> bool:
     if _is_daily_quota_error(exc):
         return False
@@ -198,6 +218,8 @@ def embed_gemini_batch(
     base_delay: float = 1.5,
     quota_retry_seconds: float | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    max_wait_seconds: float | None = None,
+    timeout: float | None = None,
 ) -> list[list[float]]:
     """Embed ``texts`` with ``google-genai`` and return L2-normalized vectors.
 
@@ -206,13 +228,21 @@ def embed_gemini_batch(
     per-minute token limit (30,000 TPM) returns ``429 RESOURCE_EXHAUSTED``,
     this honours Google's ``retry in Xs`` delay (or ``quota_retry_seconds``
     during bulk indexing) so the rolling 60-second window resets cleanly.
+
+    That patience is right for indexing and wrong for a chat question, where
+    it meant sleeping 40 s and more inside the request. A caller that is
+    answering a user sets ``max_wait_seconds`` (a longer advised wait raises
+    :class:`VectorStoreBusy` at once) and ``timeout`` (seconds for the HTTP
+    call; a timed-out call is not repeated).
     """
     if not texts:
         return []
-    config = {
+    config: dict = {
         "output_dimensionality": dims,
         "task_type": task_type,
     }
+    if timeout is not None and timeout > 0:
+        config["http_options"] = {"timeout": max(1, int(timeout * 1000))}   # milliseconds
     attempt = 0
     while True:
         try:
@@ -236,6 +266,10 @@ def embed_gemini_batch(
                     "Already-saved batches remain in Chroma -- re-run later to resume, "
                     "or run with --provider local for offline indexing."
                 ) from exc
+            if timeout is not None and _is_timeout_error(exc):
+                raise VectorStoreBusy(
+                    f"Gemini embedding did not answer within {timeout:g} s"
+                ) from exc
             if attempt < max_retries and _is_retryable_error(exc):
                 advised = _parse_retry_after_seconds(exc)
                 if advised is not None:
@@ -244,6 +278,10 @@ def embed_gemini_batch(
                     wait_s = quota_retry_seconds
                 else:
                     wait_s = base_delay * (2 ** attempt)
+                if max_wait_seconds is not None and wait_s > max_wait_seconds:
+                    raise VectorStoreBusy(
+                        f"Gemini embedding is rate limited (retry in {wait_s:.0f} s)"
+                    ) from exc
                 if wait_s >= 10.0:
                     print(
                         f"  rate limit hit (free-tier TPM window) -- waiting {wait_s:.1f}s "
@@ -252,6 +290,9 @@ def embed_gemini_batch(
                 sleep_fn(wait_s)
                 attempt += 1
                 continue
+            if max_wait_seconds is not None and _is_retryable_error(exc):
+                # Still rate limited after the one short retry: temporary, not broken.
+                raise VectorStoreBusy(f"Gemini embedding is rate limited ({exc})") from exc
             raise VectorStoreUnavailable(f"Gemini embedding request failed: {exc}") from exc
 
 
@@ -297,6 +338,12 @@ def _gemini_embedder(dims: int, model_name: str | None = None):
             model_name=resolved_model,
             dims=dims,
             task_type="RETRIEVAL_QUERY",
+            # A user is waiting: one short retry, a hard time limit, and no
+            # sleeping through a quota window (keyword retrieval answers instead).
+            max_retries=1,
+            base_delay=1.0,
+            max_wait_seconds=QUERY_EMBED_MAX_WAIT,
+            timeout=QUERY_EMBED_TIMEOUT,
         )
 
     return embed

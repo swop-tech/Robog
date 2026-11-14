@@ -108,6 +108,13 @@ def main(argv: list[str] | None = None) -> int:
             print("  nothing to verify: no passage of the manuals answered this")
         else:
             print("  all checks passed")
+    timings = answer.timings or {}
+    print(
+        f"\nTime: {answer.latency_ms / 1000:.1f} s "
+        f"(retrieval {timings.get('retrieval_ms', 0) / 1000:.1f} s, "
+        f"model {timings.get('generation_ms', 0) / 1000:.1f} s "
+        f"in {timings.get('llm_calls', 0)} call(s))"
+    )
     if answer.fallback_reason:
         print(f"\nWritten by the offline formatter because: {answer.fallback_reason}")
         print("  (it can only quote the manuals; run `python -m answer --check`)")

@@ -20,6 +20,7 @@ import math
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from retrieve.engine import SearchEngine
@@ -218,6 +219,44 @@ class EngineFusionTests(unittest.TestCase):
         self.assertTrue(result.hits, "keyword retrieval must keep answering")
         self.assertIsNone(engine.retriever, "broken retriever is disabled after failure")
         self.assertTrue(any("dense retrieval disabled: boom" in note for note in result.notes))
+
+    def test_busy_vector_store_is_paused_not_dropped(self):
+        """A rate limit is temporary: keyword search answers, dense comes back later."""
+        from retrieve import engine as engine_module
+        from retrieve.vector import VectorStoreBusy
+
+        class Busy:
+            provider = "gemini"
+
+            def __init__(self):
+                self.calls = 0
+                self.busy = True
+
+            def search(self, query, k=10, *, allowed_ids=None):
+                self.calls += 1
+                if self.busy:
+                    raise VectorStoreBusy("Gemini embedding is rate limited (retry in 44 s)")
+                return []
+
+        retriever = Busy()
+        engine = SearchEngine(self.chunks, self.params, retriever=retriever)
+        clock = [1000.0]
+        with mock.patch.object(engine_module.time, "monotonic", lambda: clock[0]):
+            result = engine.search("payload kg", k=3)
+            self.assertTrue(result.hits, "keyword retrieval must keep answering")
+            self.assertIs(engine.retriever, retriever, "a busy retriever is kept")
+            self.assertTrue(any("dense retrieval paused" in note for note in result.notes))
+            calls = retriever.calls
+
+            engine.search("payload kg", k=3)                  # inside the pause: not asked
+            self.assertEqual(retriever.calls, calls)
+
+            clock[0] += engine_module.DENSE_PAUSE_SECONDS + 1  # pause over, quota back
+            retriever.busy = False
+            result = engine.search("payload kg", k=3)
+            self.assertGreater(retriever.calls, calls)
+            self.assertFalse(any("paused" in note for note in result.notes))
+            self.assertTrue(any("dense retrieval on" in note for note in result.notes))
 
     def test_rank_tier_fuses_dense_list_directly(self):
         engine = SearchEngine(self.chunks, self.params)
@@ -520,11 +559,77 @@ class GeminiEmbeddingContractTests(unittest.TestCase):
         vectors = embed_fn(["how heavy is FlashBot?"])
         self.assertEqual(len(vectors), 1)
         self.assertEqual(len(vectors[0]), 256)
-        self.assertEqual(
-            client.models.calls[0]["config"],
-            {"output_dimensionality": 256, "task_type": "RETRIEVAL_QUERY"},
-        )
+        config = client.models.calls[0]["config"]
+        self.assertEqual(config["output_dimensionality"], 256)
+        self.assertEqual(config["task_type"], "RETRIEVAL_QUERY")
+        # A user is waiting for this call: it carries a time limit (milliseconds).
+        self.assertEqual(config["http_options"], {"timeout": 8000})
         self.assertEqual(client.models.calls[0]["model"], "gemini-embedding-001")
+
+    def test_query_embedder_does_not_sleep_through_a_quota_window(self):
+        """Indexing waits out "retry in 42.5s"; a chat question must not."""
+        from unittest.mock import patch
+        from retrieve.vector import VectorStoreBusy, make_embedder
+
+        client = _StrictGenAIClient(
+            fail_error=RuntimeError("429 RESOURCE_EXHAUSTED: Quota exceeded. Please retry in 42.5s.")
+        )
+        with patch("retrieve.vector.create_gemini_client", return_value=client):
+            embed_fn, _provider = make_embedder("gemini", 256, model="gemini-embedding-001")
+            with self.assertRaises(VectorStoreBusy) as ctx:
+                embed_fn(["how heavy is FlashBot?"])
+        # One call and no retry: nothing was waited for.
+        self.assertEqual(len(client.models.calls), 1)
+        self.assertIn("rate limited", str(ctx.exception))
+
+    def test_query_embedder_does_not_repeat_a_timed_out_call(self):
+        from unittest.mock import patch
+        from retrieve.vector import VectorStoreBusy, make_embedder
+
+        client = _StrictGenAIClient(fail_error=TimeoutError("timed out"))
+        with patch("retrieve.vector.create_gemini_client", return_value=client):
+            embed_fn, _provider = make_embedder("gemini", 256, model="gemini-embedding-001")
+            with self.assertRaises(VectorStoreBusy):
+                embed_fn(["q"])
+        self.assertEqual(len(client.models.calls), 1)
+
+    def test_interactive_embedding_retries_a_short_rate_limit_once(self):
+        from retrieve.vector import (
+            QUERY_EMBED_MAX_WAIT, QUERY_EMBED_TIMEOUT, VectorStoreBusy, embed_gemini_batch,
+        )
+
+        interactive = dict(
+            dims=128, max_retries=1, base_delay=1.0,
+            max_wait_seconds=QUERY_EMBED_MAX_WAIT, timeout=QUERY_EMBED_TIMEOUT,
+        )
+        sleeps: list[float] = []
+        client = _StrictGenAIClient(fail_times=1)
+        vectors = embed_gemini_batch(client, ["q"], sleep_fn=sleeps.append, **interactive)
+        self.assertEqual(len(vectors), 1)
+        self.assertEqual(sleeps, [1.0])
+
+        # Still limited after that one retry: busy (temporary), not unavailable for good.
+        sleeps.clear()
+        always = _StrictGenAIClient(fail_times=99)
+        with self.assertRaises(VectorStoreBusy):
+            embed_gemini_batch(always, ["q"], sleep_fn=sleeps.append, **interactive)
+        self.assertEqual(len(always.models.calls), 2)
+        self.assertEqual(sleeps, [1.0])
+
+    def test_bulk_indexing_still_waits_for_the_quota_window(self):
+        from retrieve.vector import embed_gemini_batch
+
+        sleeps: list[float] = []
+        client = _StrictGenAIClient(
+            fail_times=1,
+            fail_error=RuntimeError("429 RESOURCE_EXHAUSTED: Quota exceeded. Please retry in 42.5s."),
+        )
+        with self.assertRaises(Exception):
+            # fail_error stays set, so the second attempt fails too; what matters
+            # is that the first failure was waited out, as before.
+            embed_gemini_batch(client, ["chunk"], dims=128, max_retries=1, sleep_fn=sleeps.append)
+        self.assertEqual(sleeps, [44.5])
+        self.assertNotIn("http_options", client.models.calls[0]["config"])
 
     def test_retries_transient_rate_limit_errors(self):
         from retrieve.vector import embed_gemini_batch

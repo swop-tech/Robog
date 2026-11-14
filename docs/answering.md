@@ -118,6 +118,26 @@ or per-tray arithmetic — so the number check can verify every value.
 Limit: the offline formatter still cannot *judge* between robots. Once a scenario is given it lists the
 matching cards; it does not say which is better.
 
+### How long an answer may take
+
+Nothing on the way to an answer waits without a limit. Before, three things did:
+
+| Stage | Before | Now |
+|---|---|---|
+| A model call | no timeout: the SDK has none, so a stalled call held the request until the browser gave up at 60 s | `ROBOG_LLM_TIMEOUT` (30 s) per call; a timed-out call is not repeated |
+| All model calls of one answer (first draft, retry after a rate limit, regeneration after a failed check, model replacement) | each could take its full time, one after the other | `ROBOG_ANSWER_BUDGET` (40 s) together; no regeneration is started with under 8 s left |
+| Query embedding for the vector index (Gemini provider) | up to 4 retries, each sleeping through Google's advised `retry in 42 s` inside the request, and no timeout | 8 s limit, one retry only if the wait is under 2 s; otherwise keyword retrieval answers and the vector index is tried again after 60 s |
+
+The model is also asked to reason briefly (`ROBOG_LLM_THINKING=low`). The Flash models think before
+they write and, left to their own budget, that can take longer than writing the answer. The 2.x
+models get a token budget, later ones a level; a model that rejects the setting is called without it.
+`default` hands the decision back to the model.
+
+When the time runs out the answer still arrives: the formatter writes it and `fallback_reason` says
+`the model '…' did not answer in time`. Every answer carries `timings` (`retrieval_ms`,
+`generation_ms`, `llm_calls`), and `python -m answer "question"` prints them, so "slow" is a number
+per stage.
+
 ### 1c. Small talk
 
 A message that is only a greeting or thanks (`hello`, `Grüß Gott`, `ciao`, `danke`, `grazie mille`)
@@ -297,7 +317,7 @@ drafts are being rejected".
 | `answer/composer.py` | retrieve → evidence → generate → validate → (re-ask | fall back) → `Answer` |
 | `answer/evaluate.py` | answer-level benchmark over the 28 questions |
 | `answer/strings.py` | the localized sentences Robog writes itself (EN/DE/IT) |
-| `tests/test_answer.py` | 126 tests: checks, formatter, generators, composer, evaluator, real corpus |
+| `tests/test_answer.py` | 139 tests: checks, formatter, generators, composer, evaluator, real corpus |
 
 ## 7. Known limits (and where they go)
 

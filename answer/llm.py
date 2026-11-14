@@ -25,6 +25,20 @@ bot pastes paragraphs". ``GeminiGenerator.last_error`` keeps the reason in
 plain words (wrong model ID, rejected key, quota, empty response); the composer
 puts it on the answer and ``python -m answer --check`` tests the call directly.
 
+It must not make the user *wait* either. Three things used to be unbounded and
+are now capped:
+
+* every HTTP call has a timeout (``ROBOG_LLM_TIMEOUT``, default 30 s; the SDK
+  has none of its own, so a stalled connection used to hang the request);
+* a timed-out call is not retried (the retry would wait just as long);
+* the model is asked to think briefly (``ROBOG_LLM_THINKING``, default ``low``).
+  The Flash models reason before they write, and with the default dynamic
+  budget that can take longer than the answer itself. Answering from five
+  retrieved passages does not need it.
+
+``draft(..., timeout=)`` additionally lets the composer hand down what is left
+of its own time budget, so retries and model replacements stop at a deadline.
+
 One failure is repaired instead of reported: a model ID the key can no longer
 call. Google retires model IDs, and a ``.env`` copied a few months ago still
 names the old one, so every answer would come from the formatter until someone
@@ -61,7 +75,16 @@ from .formatter import Draft, format_answer
 DEFAULT_LLM_MODEL = "gemini-3.8-flash"
 ENV_LLM_MODEL = "ROBOG_LLM_MODEL"
 ENV_LLM_PROVIDER = "ROBOG_LLM_PROVIDER"     # "gemini" | "offline"
-ENV_LLM_TIMEOUT = "ROBOG_LLM_TIMEOUT"
+ENV_LLM_TIMEOUT = "ROBOG_LLM_TIMEOUT"       # seconds per HTTP call; 0 = no limit
+ENV_LLM_THINKING = "ROBOG_LLM_THINKING"     # low | minimal | off | default
+
+#: Seconds one generation call may take before it is abandoned.
+DEFAULT_LLM_TIMEOUT = 30.0
+#: How much the model reasons before it writes. ``default`` leaves it to the model.
+DEFAULT_LLM_THINKING = "low"
+_THINKING_MODES = ("low", "minimal", "off", "default")
+#: Below this many seconds there is no point starting another call.
+MIN_CALL_SECONDS = 2.0
 
 #: Room for the answer *and* the model's reasoning. The Flash models think
 #: before they write, and those tokens are billed against this same limit: at
@@ -123,6 +146,8 @@ class GeminiGenerator:
     """``gemini-3.8-flash`` through ``google-genai`` (one HTTP call, no framework)."""
 
     name = "gemini"
+    #: ``draft`` takes ``timeout=`` (seconds left for this answer).
+    accepts_timeout = True
 
     def __init__(
         self,
@@ -145,7 +170,11 @@ class GeminiGenerator:
         self._api_key = api_key
         self.attempts = max(1, attempts)
         self.base_delay = base_delay
-        self.timeout = timeout
+        #: Seconds per HTTP call (``None``: no limit).
+        self.timeout = _resolve_timeout(timeout)
+        self.thinking = _resolve_thinking()
+        #: Models that rejected the thinking setting; they are called without it.
+        self._plain_models: set[str] = set()
         self._sleep = sleep_fn
         #: Why the most recent call produced no answer (``None`` after a success).
         self.last_error: str | None = None
@@ -178,17 +207,24 @@ class GeminiGenerator:
         language: str,
         route: str = "default",
         question: str = "",
+        timeout: float | None = None,
     ) -> Draft | None:
-        """Ask Gemini; ``None`` on any failure (caller falls back to offline)."""
+        """Ask Gemini; ``None`` on any failure (caller falls back to offline).
+
+        ``timeout`` is the time left for this answer, in seconds. Retries and
+        model replacements all stop when it runs out; each single HTTP call is
+        further limited by ``self.timeout``.
+        """
         client = self._resolve_client()
         if client is None:
             self.last_error = missing_gemini_reason()
             return None
 
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
         model = self.model
-        answer, error = self._call(client, model, prompt)
+        answer, error = self._call(client, model, prompt, deadline)
         if answer is None and is_model_unavailable(error):
-            answer, model, error = self._call_replacement(client, prompt, error)
+            answer, model, error = self._call_replacement(client, prompt, error, deadline)
 
         if answer is None:
             self.last_error = explain_failure(error, self.model)
@@ -197,20 +233,18 @@ class GeminiGenerator:
         self.last_error = None
         return Draft(text=answer.strip(), provider=self.name, model=model, language=language)
 
-    def _call(self, client, model: str, prompt: str) -> tuple[str | None, Exception | None]:
+    def _call(
+        self, client, model: str, prompt: str, deadline: float | None = None
+    ) -> tuple[str | None, Exception | None]:
         """One model, with retries for transient errors: ``(text, None)`` or ``(None, error)``."""
         error: Exception | None = None
         for attempt in range(self.attempts):
+            call_timeout = self._call_timeout(deadline)
+            if deadline is not None and deadline - time.monotonic() < MIN_CALL_SECONDS:
+                error = error or TimeoutError("no time left in the answer budget")
+                break
             try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=_generation_config(),
-                )
-                answer = _response_text(response)
-                if not answer:
-                    raise ValueError(f"empty response{_finish_detail(response)}")
-                return answer, None
+                return self._generate(client, model, prompt, call_timeout), None
             except Exception as exc:  # quota, timeout, bad JSON, SDK quirk ...
                 error = exc
                 if attempt + 1 >= self.attempts or not _is_retryable(exc):
@@ -218,8 +252,40 @@ class GeminiGenerator:
                 self._sleep(self.base_delay * (2**attempt))
         return None, error
 
+    def _call_timeout(self, deadline: float | None) -> float | None:
+        """Seconds this HTTP call may take: the per-call limit, capped by the deadline."""
+        if deadline is None:
+            return self.timeout
+        remaining = deadline - time.monotonic()
+        return remaining if self.timeout is None else min(self.timeout, remaining)
+
+    def _generate(self, client, model: str, prompt: str, call_timeout: float | None) -> str:
+        """One HTTP call. Raises on any failure, including an empty response."""
+        thinking = None if model in self._plain_models else self.thinking
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=_generation_config(model, timeout=call_timeout, thinking=thinking),
+            )
+        except Exception as exc:
+            # A model that does not take this thinking setting answers 400.
+            # Ask again without it rather than lose the answer over a tuning knob.
+            if thinking in (None, "default") or not _is_invalid_argument(exc):
+                raise
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=_generation_config(model, timeout=call_timeout, thinking=None),
+            )
+            self._plain_models.add(model)        # only once the plain call worked
+        answer = _response_text(response)
+        if not answer:
+            raise ValueError(f"empty response{_finish_detail(response)}")
+        return answer
+
     def _call_replacement(
-        self, client, prompt: str, error: Exception | None
+        self, client, prompt: str, error: Exception | None, deadline: float | None = None
     ) -> tuple[str | None, str, Exception | None]:
         """The configured model is gone: answer with one this key can call.
 
@@ -239,7 +305,7 @@ class GeminiGenerator:
             if tried >= MAX_MODEL_REPLACEMENTS:
                 break
             tried += 1
-            answer, candidate_error = self._call(client, candidate, prompt)
+            answer, candidate_error = self._call(client, candidate, prompt, deadline)
             if answer is not None:
                 self.model = candidate
                 self.model_note = (
@@ -363,7 +429,9 @@ def check_llm(model: str | None = None, *, client=None) -> tuple[bool, list[str]
         return False, lines
     lines.append("ok    API key found and google-genai installed")
 
+    started = time.monotonic()
     draft = generator.draft("Reply with the single word: ready", Evidence(), language="en")
+    elapsed = time.monotonic() - started
     if draft is None:
         lines.append(f"FAIL  {generator.model}: {generator.last_error}")
         if "is not available for this API key" in (generator.last_error or ""):
@@ -376,28 +444,101 @@ def check_llm(model: str | None = None, *, client=None) -> tuple[bool, list[str]
         lines.append(f"warn  {generator.requested_model} is not available for this API key.")
         lines.append(f"      Robog switched to {generator.model}, and does so again after every restart.")
         lines.append(f"      Set {ENV_LLM_MODEL}={generator.model} in .env to skip the failed first call.")
-    lines.append(f"ok    {generator.model} answered: {draft.text[:60]!r}")
-    lines.append("      Answers will be written by the model.")
+    lines.append(f"ok    {generator.model} answered in {elapsed:.1f} s: {draft.text[:60]!r}")
+    limit = "no limit" if generator.timeout is None else f"{generator.timeout:g} s"
+    lines.append(
+        f"      Answers will be written by the model "
+        f"(thinking: {generator.thinking}, time limit per call: {limit})."
+    )
+    lines.append("      For the time a real question takes: python -m answer \"your question\"")
     return True, lines
 
 
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
-def _generation_config():
-    """Low but not zero temperature (facts stay put, wording is not robotic)."""
+def _resolve_timeout(explicit: float | None) -> float | None:
+    """Per-call limit in seconds: argument, else ``ROBOG_LLM_TIMEOUT``, else 30. ``0`` = none."""
+    value: float | None = explicit
+    if value is None:
+        raw = (os.environ.get(ENV_LLM_TIMEOUT) or "").strip()
+        try:
+            value = float(raw) if raw else DEFAULT_LLM_TIMEOUT
+        except ValueError:
+            value = DEFAULT_LLM_TIMEOUT
+    return value if value > 0 else None
+
+
+def _resolve_thinking() -> str:
+    mode = (os.environ.get(ENV_LLM_THINKING) or DEFAULT_LLM_THINKING).strip().lower()
+    return mode if mode in _THINKING_MODES else DEFAULT_LLM_THINKING
+
+
+def _thinking_config(types, model: str, thinking: str | None):
+    """The SDK's thinking setting for ``thinking``, or ``None`` to send nothing.
+
+    The 2.x models take a token budget, later ones a level. A model that
+    accepts neither answers 400 and is then called without the setting.
+    """
+    if thinking in (None, "default"):
+        return None
+    try:
+        if re.match(r"^(models/)?gemini-2\.", model):
+            return types.ThinkingConfig(thinking_budget=1024 if thinking == "low" else 0)
+        return types.ThinkingConfig(thinking_level="LOW" if thinking == "low" else "MINIMAL")
+    except Exception:  # an SDK without these fields
+        return None
+
+
+def _generation_config(model: str = "", *, timeout: float | None = None, thinking: str | None = None):
+    """Low but not zero temperature (facts stay put, wording is not robotic).
+
+    ``timeout`` (seconds) becomes the HTTP timeout of this one call; ``thinking``
+    limits how long the model reasons before it writes.
+    """
     try:
         from google.genai import types
     except ImportError:  # pragma: no cover - guarded by available
         return None
+    options = {
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+    }
+    extras = {}
+    thinking_config = _thinking_config(types, model, thinking)
+    if thinking_config is not None:
+        extras["thinking_config"] = thinking_config
+    if timeout is not None and timeout > 0:
+        try:
+            # The SDK counts in milliseconds.
+            extras["http_options"] = types.HttpOptions(timeout=max(1, int(timeout * 1000)))
+        except Exception:
+            pass
     try:
-        return types.GenerateContentConfig(
-            temperature=0.3,
-            top_p=0.95,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-        )
+        return types.GenerateContentConfig(**options, **extras)
+    except Exception:
+        pass
+    try:
+        return types.GenerateContentConfig(**options)
     except TypeError:  # very old SDKs
         return None
+
+
+def _is_invalid_argument(exc: Exception) -> bool:
+    message = f"{type(exc).__name__}: {exc}".lower()
+    return "400" in message or "invalid_argument" in message or "invalid argument" in message
+
+
+def _is_timeout(exc: Exception | None) -> bool:
+    """True for a call that ran out of time (client-side timeout or the API's 504)."""
+    if exc is None:
+        return False
+    message = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        marker in message
+        for marker in ("timeout", "timed out", "deadline", "504", "no time left")
+    )
 
 
 def _finish_detail(response) -> str:
@@ -428,6 +569,11 @@ def explain_failure(exc: Exception | None, model: str) -> str | None:
         for marker in ("api key", "api_key", "401", "403", "permission", "unauthenticated")
     ):
         hint = "the API key was rejected; check GEMINI_API_KEY"
+    elif _is_timeout(exc):
+        hint = (
+            f"the model '{model}' did not answer in time; raise {ENV_LLM_TIMEOUT} "
+            f"(seconds per call) or set {ENV_LLM_MODEL} to a faster model"
+        )
     elif "empty response" in message:
         hint = "the model returned no text"
     else:
@@ -508,12 +654,16 @@ def _response_text(response) -> str:
     return ""
 
 
-_RETRYABLE = ("429", "500", "502", "503", "504", "timeout", "deadline", "unavailable", "overloaded")
+_RETRYABLE = ("429", "500", "502", "503", "unavailable", "overloaded")
 
 
 def _is_retryable(exc: Exception) -> bool:
     message = f"{type(exc).__name__}: {exc}".lower()
     if "quota" in message and "exceeded" in message and "per day" in message:
+        return False
+    # A call that ran out of time is not tried again: the second attempt would
+    # make the user wait just as long, for the same result.
+    if _is_timeout(exc):
         return False
     return any(marker in message for marker in _RETRYABLE)
 

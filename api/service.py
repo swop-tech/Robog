@@ -310,6 +310,8 @@ class RobogService:
             # Why the offline formatter answered instead of the LLM (else None).
             "fallback_reason": raw.get("fallback_reason"),
             "latency_ms": raw["latency_ms"],
+            # Where the time went: retrieval_ms, generation_ms, llm_calls.
+            "timings": raw.get("timings") or {},
         }
         if include_search:
             search = raw.get("search") or {}

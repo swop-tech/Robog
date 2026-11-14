@@ -58,6 +58,24 @@ from .validator import ValidationReport, validate_answer
 #: ``1`` / ``true``: any sentence without a source discards the generated answer.
 ENV_ANSWER_STRICT = "ROBOG_ANSWER_STRICT"
 
+#: Seconds the model may spend on one answer, all calls together (first draft,
+#: retries, the regeneration after a failed check). When it runs out the answer
+#: is written from what is already there. The web UI gives up after 60 s, so
+#: the default leaves room for retrieval and the response itself. ``0`` = no limit.
+ENV_ANSWER_BUDGET = "ROBOG_ANSWER_BUDGET"
+DEFAULT_ANSWER_BUDGET = 40.0
+#: A regeneration is only started with at least this much of the budget left.
+MIN_REGENERATION_SECONDS = 8.0
+
+
+def _env_budget() -> float | None:
+    raw = (os.environ.get(ENV_ANSWER_BUDGET) or "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_ANSWER_BUDGET
+    except ValueError:
+        value = DEFAULT_ANSWER_BUDGET
+    return value if value > 0 else None
+
 
 def _env_strict() -> bool:
     return (os.environ.get(ENV_ANSWER_STRICT) or "").strip().lower() in ("1", "true", "yes", "on")
@@ -80,6 +98,9 @@ class Answer:
     result: SearchResult | None = None
     notes: list[str] = field(default_factory=list)
     latency_ms: int = 0
+    #: Where ``latency_ms`` went: ``retrieval_ms``, ``generation_ms`` (all model
+    #: calls together) and ``llm_calls``. "It is slow" is then a number per stage.
+    timings: dict = field(default_factory=dict)
     #: Why the deterministic formatter wrote this answer instead of the LLM
     #: (``None`` when the LLM's answer was used). Shown to the user, so "the
     #: bot pastes passages" is never a mystery.
@@ -113,6 +134,7 @@ class Answer:
             "notes": self.notes,
             "fallback_reason": self.fallback_reason,
             "latency_ms": self.latency_ms,
+            "timings": self.timings,
             "search": _result_dict(self.result),
             "evidence": self.evidence.to_dict() if self.evidence else None,
         }
@@ -132,6 +154,7 @@ class AnswerComposer:
         max_regenerations: int = 1,
         max_chunks: int = 5,
         strict: bool | None = None,
+        budget: float | None = None,
     ):
         self.engine = engine
         self.k = k
@@ -139,6 +162,8 @@ class AnswerComposer:
         self.max_chunks = max_chunks
         #: ``None`` reads ``ROBOG_ANSWER_STRICT`` per request (default: off).
         self._strict = strict
+        #: Seconds of model time per answer; ``None`` reads ``ROBOG_ANSWER_BUDGET``.
+        self._budget = budget
         self._generator = generator
         self._provider = provider
         self._model = model
@@ -162,6 +187,13 @@ class AnswerComposer:
     @property
     def strict(self) -> bool:
         return _env_strict() if self._strict is None else bool(self._strict)
+
+    @property
+    def budget(self) -> float | None:
+        """Seconds the model may spend on one answer (``None``: no limit)."""
+        if self._budget is None:
+            return _env_budget()
+        return self._budget if self._budget > 0 else None
 
     # -- main entry point --------------------------------------------------
     def answer(
@@ -198,7 +230,10 @@ class AnswerComposer:
                             search_kwargs["product"] = mentioned_before[0]
                         break
         requested_language = language        # an explicit request wins over detection
+        timings: dict = {"retrieval_ms": 0, "generation_ms": 0, "llm_calls": 0}
+        retrieval_started = time.perf_counter()
         result = result or self.engine.search(question, k=k or self.k, language=language, **search_kwargs)
+        timings["retrieval_ms"] = int((time.perf_counter() - retrieval_started) * 1000)
         evidence = Evidence.from_result(result, max_chunks=self.max_chunks)
         language = result.language or language or "en"
 
@@ -219,7 +254,7 @@ class AnswerComposer:
                 notes=[f"small talk ({kind}): answered without retrieval evidence"],
             )
             empty = Evidence(language=language, notes=list(result.notes))
-            return self._finish(question, draft, empty, result, language, notes, started)
+            return self._finish(question, draft, empty, result, language, notes, started, timings=timings)
 
         # "What is the value of this parameter?" names neither a robot nor a
         # parameter. The index holds 2,039 parameter rows, so whatever passage
@@ -237,7 +272,7 @@ class AnswerComposer:
             )
             empty = Evidence(language=language, notes=list(result.notes))
             notes.append("asked back: question named neither a robot nor a parameter")
-            return self._finish(question, draft, empty, result, language, notes, started)
+            return self._finish(question, draft, empty, result, language, notes, started, timings=timings)
 
         # A stated load or passage that no card satisfies: say so, do not
         # substitute a robot that fails the requirement.
@@ -256,7 +291,7 @@ class AnswerComposer:
             )
             empty = Evidence(language=language, notes=list(result.notes))
             notes.append("asked back: no robot satisfies the stated constraint")
-            return self._finish(question, draft, empty, result, language, notes, started)
+            return self._finish(question, draft, empty, result, language, notes, started, timings=timings)
 
         # "Which robot is best?" names no use case, environment or number. Any
         # ranking would be arbitrary, so ask for the scenario instead of listing
@@ -270,11 +305,11 @@ class AnswerComposer:
             )
             empty = Evidence(language=language, notes=list(result.notes))
             notes.append("asked back: advisory question named no use case")
-            return self._finish(question, draft, empty, result, language, notes, started)
+            return self._finish(question, draft, empty, result, language, notes, started, timings=timings)
 
         if not evidence.refs:
             draft = format_answer(evidence, question=question, language=language, route=result.route)
-            return self._finish(question, draft, evidence, result, language, notes, started)
+            return self._finish(question, draft, evidence, result, language, notes, started, timings=timings)
 
         generator = self.generator
         strict = self.strict
@@ -282,8 +317,17 @@ class AnswerComposer:
         prompt = build_prompt(
             question, evidence, language=language, route=result.route, history=history
         )
+        budget = self.budget
+        generation_started = time.perf_counter()
+
+        def time_left() -> float | None:
+            if budget is None:
+                return None
+            return budget - (time.perf_counter() - generation_started)
+
+        timings["llm_calls"] += int(getattr(generator, "name", "") == "gemini")
         draft = _safe_draft(
-            generator, prompt, evidence, language, result.route, question
+            generator, prompt, evidence, language, result.route, question, timeout=time_left()
         )
         if draft is None:
             error = getattr(generator, "last_error", None)
@@ -313,10 +357,17 @@ class AnswerComposer:
         attempts = 0
         while not report.ok and from_llm and attempts < self.max_regenerations:
             attempts += 1
+            remaining = time_left()
+            if remaining is not None and remaining < MIN_REGENERATION_SECONDS:
+                # Asking again would push the answer past the time limit.
+                notes.append("not regenerated: the answer time budget was used up")
+                break
             notes.append("regenerated after failed evidence validation")
             retry_prompt = _repair_prompt(prompt, report)
+            timings["llm_calls"] += 1
             retry = _safe_draft(
-                generator, retry_prompt, evidence, language, result.route, question
+                generator, retry_prompt, evidence, language, result.route, question,
+                timeout=remaining,
             )
             if retry is None:
                 break
@@ -336,9 +387,10 @@ class AnswerComposer:
                     fallback_reason = _validation_reason(report)
                 draft, report = fallback, fallback_report
 
+        timings["generation_ms"] = int((time.perf_counter() - generation_started) * 1000)
         return self._finish(
             question, draft, evidence, result, language, notes, started, report,
-            fallback_reason=fallback_reason,
+            fallback_reason=fallback_reason, timings=timings,
         )
 
     # -- assembly ----------------------------------------------------------
@@ -353,6 +405,7 @@ class AnswerComposer:
         started: float,
         report: ValidationReport | None = None,
         fallback_reason: str | None = None,
+        timings: dict | None = None,
     ) -> Answer:
         report = report or validate_answer(draft.text, evidence, language=language)
         citations = _citations(report, evidence)
@@ -374,6 +427,7 @@ class AnswerComposer:
             result=result,
             notes=notes,
             latency_ms=int((time.perf_counter() - started) * 1000),
+            timings=dict(timings or {}),
             fallback_reason=fallback_reason,
         )
 
@@ -396,11 +450,20 @@ def _safe_draft(
     language: str,
     route: str = "default",
     question: str = "",
+    timeout: float | None = None,
 ) -> Draft | None:
-    """Call a generator, converting every failure into ``None`` (demo-safe)."""
+    """Call a generator, converting every failure into ``None`` (demo-safe).
+
+    ``timeout`` (seconds left for this answer) is passed on only to generators
+    that declare ``accepts_timeout``; the offline formatter and test doubles
+    keep the plain ``draft`` signature.
+    """
+    extra = {}
+    if timeout is not None and getattr(generator, "accepts_timeout", False):
+        extra["timeout"] = timeout
     try:
         return generator.draft(
-            prompt, evidence, language=language, route=route, question=question
+            prompt, evidence, language=language, route=route, question=question, **extra
         )
     except Exception as exc:  # a generator must never break /ask
         import sys
