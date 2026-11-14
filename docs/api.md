@@ -37,6 +37,7 @@ curl -s localhost:8000/health
 |---|---|---|
 | `vector_active` | `true` | `vector_detail` gives the reason (no store, provider mismatch, missing key/package) |
 | `provider.provider` | `gemini` | `provider.reason` gives the reason; answers come from the offline formatter |
+| `provider.model_note` | `null` | set when `ROBOG_LLM_MODEL` names a model the key cannot call and another one answers instead; `provider.model` is then the replacement and `provider.requested_model` the configured one |
 | `provider.last_error` | `null` | the last Gemini call failed (wrong model ID, rejected key, quota); answers are coming from the offline formatter until a call succeeds. `python -m answer --check` repeats the call |
 | `chunks` | `1351` | re-run `python -m ingest.run --data data` |
 
@@ -97,7 +98,7 @@ to six recent user questions with each `/ask` request; those turns are used only
 to resolve references and never as evidence. What the API cannot do yet is
 labelled in Settings and written up in [`ui-backend-gaps.md`](ui-backend-gaps.md). The split is
 `api.js` (network) / `store.js` (state) / `render.js` + `markdown.js` (payload →
-HTML) / `app.js` (DOM), with 208 `node --test` cases plus an opt-in suite that
+HTML) / `app.js` (DOM), with 209 `node --test` cases plus an opt-in suite that
 drives a running server. Full details: [`../ui/README.md`](../ui/README.md).
 
 ## `GET /search` — standalone hybrid retrieval

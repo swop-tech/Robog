@@ -441,7 +441,9 @@ export function statusChipHTML(health, { icons } = {}) {
     ? (llmError ? "Gemini failing" : "Gemini")
     : "offline";
   const vector = health.vector_active ? "hybrid" : "keyword";
-  const why = llmError || (health.provider?.provider === "gemini" ? "" : health.provider?.reason);
+  // model_note: the configured model was not available and another one answers.
+  const why = llmError
+    || (health.provider?.provider === "gemini" ? health.provider?.model_note : health.provider?.reason);
   return {
     className: "status--ready",
     label: `ready · ${provider} · ${vector}`,

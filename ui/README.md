@@ -35,7 +35,7 @@ Every module is dependency-free and side-effect-free except where noted.
 
 Data flows one way: `api.js` → `store.js` → `render.js` → DOM (via `app.js`).
 Nothing in `render.js` or `store.js` knows a browser exists, which is why 174 of
-the 208 tests run without any DOM at all.
+the 209 tests run without any DOM at all.
 
 ## Design system
 
@@ -132,7 +132,7 @@ degraded, not dead.
 # serving contract, no browser / key / corpus needed
 python -m unittest tests.test_ui -v                    # 13 tests
 
-# the frontend, no browser needed (208 tests: markdown, render, api, store, DOM)
+# the frontend, no browser needed (209 tests: markdown, render, api, store, DOM)
 node --test ui/tests/*.test.js
 
 # the DOM suite needs jsdom, a dev-only tool that is NOT a project dependency;

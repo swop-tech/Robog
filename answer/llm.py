@@ -25,6 +25,13 @@ bot pastes paragraphs". ``GeminiGenerator.last_error`` keeps the reason in
 plain words (wrong model ID, rejected key, quota, empty response); the composer
 puts it on the answer and ``python -m answer --check`` tests the call directly.
 
+One failure is repaired instead of reported: a model ID the key can no longer
+call. Google retires model IDs, and a ``.env`` copied a few months ago still
+names the old one, so every answer would come from the formatter until someone
+edits a file. ``GeminiGenerator`` instead tries the model the API's error names,
+then the default, then the models the key lists, and keeps the first that
+answers (``model_note`` says which one, and why).
+
 Usage:
     python -m answer --check               # one real call: who writes the answers?
 
@@ -37,6 +44,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -60,6 +68,10 @@ ENV_LLM_TIMEOUT = "ROBOG_LLM_TIMEOUT"
 #: the previous 1024 a longer question could spend the whole budget thinking
 #: and return no text at all, which then fell back to the offline formatter.
 MAX_OUTPUT_TOKENS = 8192
+
+#: How many other models to try when the configured one is not available.
+#: Bounded so a request cannot spend its time walking a model list.
+MAX_MODEL_REPLACEMENTS = 4
 
 
 class Generator(Protocol):
@@ -124,6 +136,11 @@ class GeminiGenerator:
         sleep_fn=time.sleep,
     ):
         self.model = (model or os.environ.get(ENV_LLM_MODEL) or DEFAULT_LLM_MODEL).strip()
+        #: The model that was asked for. ``model`` moves to a replacement when
+        #: this one turns out to be unavailable for the key; this does not.
+        self.requested_model = self.model
+        #: Set when ``model`` is a replacement: what was replaced and why.
+        self.model_note: str | None = None
         self._client = client
         self._api_key = api_key
         self.attempts = max(1, attempts)
@@ -132,6 +149,10 @@ class GeminiGenerator:
         self._sleep = sleep_fn
         #: Why the most recent call produced no answer (``None`` after a success).
         self.last_error: str | None = None
+        self._unavailable: set[str] = set()
+        #: True once a search found no usable replacement; it is not repeated on
+        #: every request (a restart, or fixing ``ROBOG_LLM_MODEL``, clears it).
+        self._no_replacement = False
 
     # -- availability ------------------------------------------------------
     @property
@@ -164,33 +185,78 @@ class GeminiGenerator:
             self.last_error = missing_gemini_reason()
             return None
 
-        last_error: Exception | None = None
+        model = self.model
+        answer, error = self._call(client, model, prompt)
+        if answer is None and is_model_unavailable(error):
+            answer, model, error = self._call_replacement(client, prompt, error)
+
+        if answer is None:
+            self.last_error = explain_failure(error, self.model)
+            _log_failure(self.model, error)
+            return None
+        self.last_error = None
+        return Draft(text=answer.strip(), provider=self.name, model=model, language=language)
+
+    def _call(self, client, model: str, prompt: str) -> tuple[str | None, Exception | None]:
+        """One model, with retries for transient errors: ``(text, None)`` or ``(None, error)``."""
+        error: Exception | None = None
         for attempt in range(self.attempts):
             try:
                 response = client.models.generate_content(
-                    model=self.model,
+                    model=model,
                     contents=prompt,
                     config=_generation_config(),
                 )
-                text = _response_text(response)
-                if not text:
+                answer = _response_text(response)
+                if not answer:
                     raise ValueError(f"empty response{_finish_detail(response)}")
-                self.last_error = None
-                return Draft(
-                    text=text.strip(),
-                    provider=self.name,
-                    model=self.model,
-                    language=language,
-                )
+                return answer, None
             except Exception as exc:  # quota, timeout, bad JSON, SDK quirk ...
-                last_error = exc
+                error = exc
                 if attempt + 1 >= self.attempts or not _is_retryable(exc):
                     break
                 self._sleep(self.base_delay * (2**attempt))
+        return None, error
 
-        self.last_error = explain_failure(last_error, self.model)
-        _log_failure(self.model, last_error)
-        return None
+    def _call_replacement(
+        self, client, prompt: str, error: Exception | None
+    ) -> tuple[str | None, str, Exception | None]:
+        """The configured model is gone: answer with one this key can call.
+
+        Returns ``(text, model, error)``. On success ``self.model`` becomes the
+        replacement, so only the first request pays for the failed call. When
+        no replacement answers, the *original* error is returned: it names the
+        setting to change, which a later quota error on some other model would not.
+        """
+        failed = self.model
+        self._unavailable.add(failed)
+        if self._no_replacement:
+            return None, failed, error
+        tried = 0
+        for candidate in replacement_models(client, failed, error):
+            if candidate in self._unavailable:
+                continue
+            if tried >= MAX_MODEL_REPLACEMENTS:
+                break
+            tried += 1
+            answer, candidate_error = self._call(client, candidate, prompt)
+            if answer is not None:
+                self.model = candidate
+                self.model_note = (
+                    f"'{self.requested_model}' is not available for this API key; "
+                    f"answering with '{candidate}' instead "
+                    f"(set {ENV_LLM_MODEL}={candidate} in .env to make it permanent)"
+                )
+                _log_replacement(self.model_note)
+                return answer, candidate, None
+            if not is_model_unavailable(candidate_error):
+                # The candidate exists but failed for another reason (quota,
+                # network). Trying further models would only repeat that; the
+                # next request may try this candidate again.
+                return None, failed, error
+            self._unavailable.add(candidate)
+        self._no_replacement = True
+        return None, failed, error
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +308,10 @@ def describe_provider(generator: Generator) -> dict:
         "model": getattr(generator, "model", None),
         "offline": name != "gemini",
         "reason": None if name == "gemini" else missing_gemini_reason(),
+        # Set when the configured model was not available for the key and
+        # another one answers instead (``model`` is then the replacement).
+        "requested_model": getattr(generator, "requested_model", None),
+        "model_note": getattr(generator, "model_note", None),
         # A configured Gemini whose calls fail still answers through the
         # formatter; this is how /health says so instead of reporting "Gemini".
         "last_error": getattr(generator, "last_error", None),
@@ -302,6 +372,10 @@ def check_llm(model: str | None = None, *, client=None) -> tuple[bool, list[str]
                 lines.append("      Models this key can use (set one as ROBOG_LLM_MODEL in .env):")
                 lines.extend(f"        {name}" for name in models[:12])
         return False, lines
+    if generator.model_note:
+        lines.append(f"warn  {generator.requested_model} is not available for this API key.")
+        lines.append(f"      Robog switched to {generator.model}, and does so again after every restart.")
+        lines.append(f"      Set {ENV_LLM_MODEL}={generator.model} in .env to skip the failed first call.")
     lines.append(f"ok    {generator.model} answered: {draft.text[:60]!r}")
     lines.append("      Answers will be written by the model.")
     return True, lines
@@ -341,10 +415,11 @@ def explain_failure(exc: Exception | None, model: str) -> str | None:
         return None
     raw = f"{type(exc).__name__}: {' '.join(str(exc).split())[:200]}"
     message = raw.lower()
-    if "404" in message or "not_found" in message or ("not found" in message and "model" in message):
+    if is_model_unavailable(exc):
         hint = (
-            f"the model '{model}' is not available for this API key; "
-            f"set {ENV_LLM_MODEL} to a model your key lists (python -m answer --check shows them)"
+            f"the model '{model}' is not available for this API key, and no replacement "
+            f"answered either; set {ENV_LLM_MODEL} to a model your key lists "
+            f"(python -m answer --check shows them)"
         )
     elif "429" in message or "quota" in message or "resource_exhausted" in message:
         hint = "the Gemini quota or rate limit is exhausted; wait or use another key"
@@ -358,6 +433,63 @@ def explain_failure(exc: Exception | None, model: str) -> str | None:
     else:
         return raw
     return f"{hint} [{raw}]"
+
+
+def is_model_unavailable(exc: Exception | None) -> bool:
+    """True when the API says this model ID cannot be called with this key.
+
+    Covers a typo, a model that was never offered to the key and a retired one
+    ("models/gemini-2.5-flash is no longer available to new users").
+    """
+    if exc is None:
+        return False
+    message = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        "404" in message
+        or "not_found" in message
+        or ("not found" in message and "model" in message)
+        or "no longer available" in message
+    )
+
+
+_MODEL_IN_ERROR = re.compile(r"models/([a-z0-9][a-z0-9.\-]*[a-z0-9])", re.IGNORECASE)
+_STABLE_TEXT_MODEL = re.compile(r"^gemini-(\d+(?:\.\d+)?)-(flash|flash-lite|pro)$")
+_TIER_ORDER = {"flash": 0, "flash-lite": 1, "pro": 2}
+
+
+def replacement_models(client, failed: str, error: Exception | None = None):
+    """Yield models worth trying instead of ``failed``, best guess first.
+
+    1. the model the API's own error message recommends,
+    2. :data:`DEFAULT_LLM_MODEL`,
+    3. the stable text models the key lists: Flash before Flash-Lite before Pro,
+       newest version first. Image, audio, live and preview variants are left
+       out; they are listed under ``generateContent`` but do not answer a chat.
+
+    The list call is only made when the first two did not settle it.
+    """
+    seen = {failed, failed.removeprefix("models/")}
+
+    def fresh(name: str) -> bool:
+        if not name or name in seen:
+            return False
+        seen.add(name)
+        return True
+
+    for match in _MODEL_IN_ERROR.finditer(str(error or "")):
+        if fresh(match.group(1)):
+            yield match.group(1)
+    if fresh(DEFAULT_LLM_MODEL):
+        yield DEFAULT_LLM_MODEL
+
+    ranked = []
+    for name in available_models(client):
+        stable = _STABLE_TEXT_MODEL.match(name)
+        if stable:
+            ranked.append((_TIER_ORDER[stable.group(2)], -float(stable.group(1)), name))
+    for _tier, _version, name in sorted(ranked):
+        if fresh(name):
+            yield name
 
 
 def _response_text(response) -> str:
@@ -397,3 +529,9 @@ def _log_failure(model: str, exc: Exception | None) -> None:
         f"{type(exc).__name__}: {str(exc)[:200]} -- falling back to the offline formatter",
         file=sys.stderr,
     )
+
+
+def _log_replacement(note: str) -> None:
+    import sys
+
+    print(f"warning: Gemini model replaced: {note}", file=sys.stderr)

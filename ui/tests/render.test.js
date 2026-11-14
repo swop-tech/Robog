@@ -565,6 +565,19 @@ describe("statusChipHTML — GET /health, including the degraded states", () => 
     assert.ok(chip.title.includes("gemini-x"), chip.title);
   });
 
+  test("a replaced model still reads Gemini, and the tooltip names the replacement", () => {
+    const chip = statusChipHTML({
+      reachable: true, ready: true, vector_active: false,
+      provider: {
+        provider: "gemini", model: "gemini-new", requested_model: "gemini-old", last_error: null,
+        model_note: "'gemini-old' is not available for this API key; answering with 'gemini-new' instead",
+      },
+    });
+    assert.ok(chip.label.includes("Gemini"), chip.label);
+    assert.ok(!chip.label.includes("failing"), chip.label);
+    assert.ok(chip.title.includes("gemini-new"), chip.title);
+  });
+
   test("offline: the tooltip says why", () => {
     const chip = statusChipHTML({
       reachable: true, ready: true, provider: { provider: "offline", reason: "GEMINI_API_KEY not set" },

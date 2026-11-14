@@ -67,12 +67,24 @@ note on the chat card, a line in the CLI) instead of being a silent swap:
 | `fallback_reason` | Meaning | Fix |
 |---|---|---|
 | `GEMINI_API_KEY not set` · `google-genai not installed` · `ROBOG_LLM_PROVIDER is set to offline` | no model is configured | add the key to `.env`, `pip install -r requirements-rag.txt`, restart the API |
-| `the LLM call failed: …` | the call was made and failed: unknown model ID, rejected key, exhausted quota, empty response | the message carries the API's own error; `python -m answer --check` repeats the call and, for an unknown model, lists the IDs the key can use |
+| `the LLM call failed: …` | the call was made and failed: rejected key, exhausted quota, empty response, or a model ID for which no replacement answered (below) | the message carries the API's own error; `python -m answer --check` repeats the call and, for an unknown model, lists the IDs the key can use |
 | `the generated answer contained a number that is not in the retrieved manual passages` | the model answered and the evidence check rejected it, also after the retry | see §4; nothing to configure |
 
 The third row used to be much wider. One sentence without a citation ("It's a quick job."), one
 unit written out ("4.5 hours" for the manual's "4.5 h") or an honest "the manuals don't list a
 price" was enough to discard the model's whole answer, and nothing in the response said so.
+
+**A retired model ID is replaced, not reported.** Google withdraws model IDs (`gemini-2.5-flash`
+now answers `404 … no longer available to new users`), and a `.env` copied from an older
+`.env.example` keeps naming the old one. That used to send every answer to the formatter until
+someone edited the file. `GeminiGenerator` now tries, in order, the model the API's error message
+recommends, the default (`gemini-3.8-flash`), and the stable text models the key lists (Flash, then
+Flash-Lite, then Pro, newest first; at most 4 attempts). The first one that answers is kept for the
+life of the process, so only the first request pays for the failed call. The switch is visible:
+`provider.requested_model` and `provider.model_note` in `GET /health`, the status chip's tooltip, a
+warning on the server's stderr, and a `warn` line from `python -m answer --check`. Setting
+`ROBOG_LLM_MODEL` to the replacement makes it permanent. Other failures (quota, rejected key) never
+trigger a switch.
 
 The fallback is not a stub. It renders, in the question's language:
 
@@ -285,7 +297,7 @@ drafts are being rejected".
 | `answer/composer.py` | retrieve → evidence → generate → validate → (re-ask | fall back) → `Answer` |
 | `answer/evaluate.py` | answer-level benchmark over the 28 questions |
 | `answer/strings.py` | the localized sentences Robog writes itself (EN/DE/IT) |
-| `tests/test_answer.py` | 117 tests: checks, formatter, generators, composer, evaluator, real corpus |
+| `tests/test_answer.py` | 126 tests: checks, formatter, generators, composer, evaluator, real corpus |
 
 ## 7. Known limits (and where they go)
 
